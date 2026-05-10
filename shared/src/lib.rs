@@ -28,7 +28,7 @@ pub enum ServerMessage {
     /// Polecenie dla klienta (źródła) aby wysłał plik strumieniem na wskazany endpoint
     UploadInstruction { file_path: String, stream_id: String },
     /// Informacja dla klienta pobierającego skąd ma ściągnąć plik
-    DownloadReady { stream_id: String },
+    DownloadReady { stream_id: String, file_name: String },
     /// Błąd
     Error { message: String },
 }

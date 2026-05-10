@@ -142,7 +142,14 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, token: Strin
                             state_clone.streams.write().await.insert(stream_id.clone(), stream_tx);
 
                             // Informujemy żądającego klienta skąd ma pobrać plik
-                            let ready_msg = ServerMessage::DownloadReady { stream_id: stream_id.clone() };
+                            let ready_msg = ServerMessage::DownloadReady { 
+                                stream_id: stream_id.clone(),
+                                file_name: std::path::PathBuf::from(&file_path)
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy()
+                                    .to_string(),
+                            };
                             if let Ok(json) = serde_json::to_string(&ready_msg) {
                                 let _ = sender.send(Message::Text(json)).await;
                             }

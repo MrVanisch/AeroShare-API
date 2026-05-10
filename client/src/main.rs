@@ -39,7 +39,8 @@ async fn main() -> anyhow::Result<()> {
     }
     info!("Zaindeksowano {} plików", files.len());
 
-    let ws_url = format!("ws://127.0.0.1:3000/ws?token={}", token);
+    let server_url = env::var("SERVER_URL").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let ws_url = format!("ws://{}/ws?token={}", server_url, token);
     info!("Łączenie do serwera: {}", ws_url);
 
     let (ws_stream, _) = connect_async(&ws_url).await?;
@@ -55,6 +56,13 @@ async fn main() -> anyhow::Result<()> {
 
     let http_client = Client::new();
     let shared_dir = Arc::new(shared_dir);
+    let server_url = Arc::new(server_url);
+
+    // Rejestracja
+    let reg_msg = ClientMessage::Register {
+        folder: SharedFolder { files },
+    };
+    write.send(Message::Text(serde_json::to_string(&reg_msg)?)).await?;
 
     while let Some(msg) = read.next().await {
         if let Ok(Message::Text(text)) = msg {
@@ -89,11 +97,12 @@ async fn main() -> anyhow::Result<()> {
                         }
 
                         let http_client_clone = http_client.clone();
+                        let server_url_clone = server_url.clone();
                         tokio::spawn(async move {
                             match File::open(&full_path).await {
                                 Ok(file) => {
                                     let stream = ReaderStream::new(file);
-                                    let upload_url = format!("http://127.0.0.1:3000/stream/{}", stream_id);
+                                    let upload_url = format!("http://{}/stream/{}", server_url_clone, stream_id);
                                     info!("Strumieniowanie pliku do: {}", upload_url);
                                     
                                     let res = http_client_clone.post(&upload_url)
@@ -113,8 +122,44 @@ async fn main() -> anyhow::Result<()> {
                             }
                         });
                     }
-                    ServerMessage::DownloadReady { stream_id } => {
-                        info!("Plik gotowy do pobrania ze streamu: {}", stream_id);
+                    ServerMessage::DownloadReady { stream_id, file_name } => {
+                        info!("Pobieranie pliku: {}", file_name);
+                        let http_client_clone = http_client.clone();
+                        let server_url_clone = server_url.clone();
+                        
+                        tokio::spawn(async move {
+                            let download_url = format!("http://{}/stream/{}", server_url_clone, stream_id);
+                            match http_client_clone.get(&download_url).send().await {
+                                Ok(mut response) if response.status().is_success() => {
+                                    let downloads_dir = PathBuf::from("./downloads");
+                                    let _ = std::fs::create_dir_all(&downloads_dir);
+                                    
+                                    // Czyszczenie nazwy pliku ze ścieżek dla bezpieczeństwa po stronie zapisującej
+                                    let safe_file_name = PathBuf::from(&file_name)
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .into_owned();
+                                        
+                                    let file_path = downloads_dir.join(safe_file_name);
+                                    
+                                    if let Ok(mut file) = tokio::fs::File::create(&file_path).await {
+                                        use tokio::io::AsyncWriteExt;
+                                        while let Ok(Some(chunk)) = response.chunk().await {
+                                            if file.write_all(&chunk).await.is_err() {
+                                                error!("Błąd zapisu pliku na dysk!");
+                                                break;
+                                            }
+                                        }
+                                        info!("Pomyślnie zapisano plik: {:?}", file_path);
+                                    } else {
+                                        error!("Nie można utworzyć pliku: {:?}", file_path);
+                                    }
+                                }
+                                Ok(response) => error!("Błąd serwera podczas pobierania: {}", response.status()),
+                                Err(e) => error!("Błąd sieci: {}", e),
+                            }
+                        });
                     }
                     ServerMessage::Error { message } => {
                         error!("Błąd serwera: {}", message);
