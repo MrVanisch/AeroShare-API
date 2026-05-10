@@ -19,7 +19,7 @@ use std::{
     path::{Component, Path as StdPath, PathBuf},
     sync::Arc,
 };
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
@@ -38,6 +38,7 @@ struct AppState {
     folders: RwLock<HashMap<String, SharedFolder>>,
     streams: RwLock<HashMap<String, StreamEntry>>,
     server_shared_dir: PathBuf,
+    server_download_dir: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +78,11 @@ async fn main() -> anyhow::Result<()> {
         PathBuf::from(env::var("SERVER_SHARED_DIR").unwrap_or_else(|_| "./server_files".into()));
     fs::create_dir_all(&server_shared_dir)?;
     info!("Folder plikow serwera: {:?}", server_shared_dir);
+    let server_download_dir = PathBuf::from(
+        env::var("SERVER_DOWNLOAD_DIR").unwrap_or_else(|_| "./server_downloads".into()),
+    );
+    fs::create_dir_all(&server_download_dir)?;
+    info!("Folder pobranych plikow serwera: {:?}", server_download_dir);
 
     let state = Arc::new(AppState {
         auth_token: token,
@@ -84,7 +90,10 @@ async fn main() -> anyhow::Result<()> {
         folders: RwLock::new(HashMap::new()),
         streams: RwLock::new(HashMap::new()),
         server_shared_dir,
+        server_download_dir,
     });
+
+    tokio::spawn(read_server_commands(state.clone()));
 
     let app = Router::new()
         .route("/ws", get(ws_handler))
@@ -100,6 +109,42 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn read_server_commands(state: Arc<AppState>) {
+    info!("Komendy serwera: download <client_id> <file_path>, help");
+
+    let stdin = BufReader::new(tokio::io::stdin());
+    let mut lines = stdin.lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if line.eq_ignore_ascii_case("help") {
+            info!("Uzycie: download <client_id> <file_path>");
+            continue;
+        }
+
+        let mut parts = line.splitn(3, ' ');
+        let command = parts.next().unwrap_or_default();
+        let target_client_id = parts.next().unwrap_or_default().trim();
+        let file_path = parts.next().unwrap_or_default().trim();
+
+        if command != "download" || target_client_id.is_empty() || file_path.is_empty() {
+            warn!("Nieznana komenda. Uzycie: download <client_id> <file_path>");
+            continue;
+        }
+
+        request_client_file_for_server(
+            &state,
+            target_client_id.to_string(),
+            file_path.replace('\\', "/"),
+        )
+        .await;
+    }
 }
 
 async fn ws_handler(
@@ -341,6 +386,94 @@ async fn request_server_file_download(
             }
         }
     });
+}
+
+async fn request_client_file_for_server(
+    state: &Arc<AppState>,
+    target_client_id: String,
+    file_path: String,
+) {
+    let clients_read = state.clients.read().await;
+    let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
+        warn!("Nie znaleziono klienta: {}", target_client_id);
+        return;
+    };
+    drop(clients_read);
+
+    let file_name = PathBuf::from(&file_path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    if file_name.is_empty() {
+        warn!("Nie mozna pobrac pliku bez nazwy");
+        return;
+    }
+
+    let stream_id = uuid::Uuid::new_v4().to_string();
+    let (stream_tx, stream_rx) = mpsc::channel(1024);
+    state.streams.write().await.insert(
+        stream_id.clone(),
+        StreamEntry {
+            sender: Some(stream_tx),
+            receiver: Some(stream_rx),
+        },
+    );
+
+    let upload_req = ServerMessage::UploadInstruction {
+        file_path,
+        stream_id: stream_id.clone(),
+    };
+
+    if target_tx.send(upload_req).await.is_err() {
+        state.streams.write().await.remove(&stream_id);
+        warn!("Nie mozna zlecic klientowi wysylki pliku");
+        return;
+    }
+
+    let mut receiver = {
+        let mut streams = state.streams.write().await;
+        let Some(entry) = streams.get_mut(&stream_id) else {
+            warn!("Stream pobierania nie istnieje");
+            return;
+        };
+        entry.receiver.take()
+    };
+
+    let Some(mut receiver) = receiver.take() else {
+        warn!("Stream pobierania zostal juz uzyty");
+        return;
+    };
+
+    let output_path = state.server_download_dir.join(file_name);
+    info!(
+        "Serwer pobiera plik od klienta {} do {:?}",
+        target_client_id, output_path
+    );
+
+    let result = write_stream_to_file(&mut receiver, &output_path).await;
+    state.streams.write().await.remove(&stream_id);
+
+    match result {
+        Ok(()) => info!("Serwer zapisal pobrany plik: {:?}", output_path),
+        Err(e) => error!("Blad zapisu pobranego pliku na serwerze: {}", e),
+    }
+}
+
+async fn write_stream_to_file(
+    receiver: &mut mpsc::Receiver<StreamChunk>,
+    output_path: &StdPath,
+) -> anyhow::Result<()> {
+    let file = tokio::fs::File::create(output_path).await?;
+    let mut writer = tokio::io::BufWriter::with_capacity(256 * 1024, file);
+
+    while let Some(chunk) = receiver.recv().await {
+        writer.write_all(&chunk?).await?;
+    }
+
+    writer.flush().await?;
+    Ok(())
 }
 
 async fn stream_server_file(

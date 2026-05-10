@@ -78,6 +78,12 @@ Server-hosted files are read from:
 ./server_files
 ```
 
+Files downloaded by the server console are written to:
+
+```text
+./server_downloads
+```
+
 ## Client Configuration
 
 The client must use the same token as the server.
@@ -161,10 +167,19 @@ To download from the server's own shared folder, use:
 download server test.txt
 ```
 
+The server console can also request a file from a connected client:
+
+```text
+download <client_id> <file_path>
+```
+
+The server saves those files in `./server_downloads`.
+
 ## Environment Variables
 
 - `SERVER_TOKEN` - authorization token used by the server and client.
 - `SERVER_BIND` - server bind address, defaults to `0.0.0.0:5000`.
+- `SERVER_DOWNLOAD_DIR` - server-side download directory, defaults to `./server_downloads`.
 - `SERVER_SHARED_DIR` - server-side shared directory, defaults to `./server_files`.
 - `SERVER_URL` - server address used by the client, defaults to `127.0.0.1:5000`.
 - `SHARED_DIR` - client directory to share, defaults to `./shared_files`.

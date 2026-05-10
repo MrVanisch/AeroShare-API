@@ -76,6 +76,12 @@ Pliki udostepniane przez serwer sa czytane z:
 ./server_files
 ```
 
+Pliki pobierane z konsoli serwera sa zapisywane w:
+
+```text
+./server_downloads
+```
+
 ## Konfiguracja klienta
 
 Klient potrzebuje tego samego tokenu co serwer.
@@ -159,10 +165,19 @@ Aby pobrac plik z folderu serwera, wpisz:
 download server test.txt
 ```
 
+Konsola serwera moze tez pobrac plik od podlaczonego klienta:
+
+```text
+download <client_id> <file_path>
+```
+
+Serwer zapisze takie pliki w `./server_downloads`.
+
 ## Zmienne srodowiskowe
 
 - `SERVER_TOKEN` - token autoryzacyjny dla serwera i klienta.
 - `SERVER_BIND` - adres nasluchiwania serwera, domyslnie `0.0.0.0:5000`.
+- `SERVER_DOWNLOAD_DIR` - folder plikow pobranych przez serwer, domyslnie `./server_downloads`.
 - `SERVER_SHARED_DIR` - folder plikow udostepnianych przez serwer, domyslnie `./server_files`.
 - `SERVER_URL` - adres serwera dla klienta, domyslnie `127.0.0.1:5000`.
 - `SHARED_DIR` - katalog udostepnianych plikow dla klienta, domyslnie `./shared_files`.
