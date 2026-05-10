@@ -1,49 +1,151 @@
-# AeroShare API 🚀
+# AeroShare API
 
-AeroShare API to potężne, bezpieczne i ultraszybkie narzędzie do współdzielenia plików typu P2P. Zostało w całości napisane w języku **Rust** przy użyciu asynchronicznego środowiska Tokio i frameworka serwerowego Axum. Zapewnia błyskawiczny transfer ogromnych plików (kilkadziesiąt Gigabajtów) pomiędzy klientami bez obciążania pamięci operacyjnej (RAM) na serwerze przekaźnikowym (Relay).
+AeroShare API to aplikacja do udostepniania plikow przez serwer relay. Projekt jest napisany w Rust i sklada sie z trzech czesci:
 
-## Główne cechy (Features) ✨
-- **Błyskawiczne Strumieniowanie:** Oparte o architekturę *Relay*. Serwer pośredniczy w wysyłaniu plików między klientami za pomocą niskopoziomowych kanałów (MPSC), przez co nie zużywa RAM-u nawet przy wysyłaniu filmów ważących ponad 100 GB.
-- **Dynamiczne Tokeny (Zero-Trust):** Zamiast haseł statycznych system używa generowanego w locie kryptograficznie bezpiecznego tokenu autoryzującego.
-- **Ochrona przed Path Traversal:** Pancerne bezpieczeństwo po stronie klienta – głęboka kanonizacja ścieżek `fs::canonicalize()` gwarantuje niemożliwość ucieczki poza wyznaczony folder (zapobiega atakom typu `../../../Windows/`).
-- **Komunikacja WebSockets:** Sygnalizacja odbywa się w pełni asynchronicznie, co pozwala systemowi na błyskawiczne reagowanie na żądania pobierania plików.
+- `server` - serwer WebSocket/HTTP, ktory rejestruje klientow i posredniczy w streamingu plikow.
+- `client` - klient, ktory indeksuje lokalny folder, laczy sie z serwerem i wysyla/pobiera pliki.
+- `shared` - wspolne typy wiadomosci uzywane przez klienta i serwer.
 
-## Wymagania ⚙️
-Aby zbudować i uruchomić ten projekt, potrzebujesz zainstalowanego języka **Rust**.
-1. Wejdź na [rustup.rs](https://rustup.rs/) (lub uruchom `rustup-init.exe` z [tej strony](https://win.rustup.rs)).
-2. Zainstaluj standardowy Toolchain.
+## Bezpieczenstwo
 
-## Architektura
-Projekt jest ułożony jako **Cargo Workspace** i składa się z trzech części:
-- `server/` – Serwer Sygnalizacyjny i Przekaźnik (Relay). Wystawia port 3000 dla połączeń WebSocket i HTTP.
-- `client/` – Lekka aplikacja kliencka udostępniająca pliki w trybie ciągłym.
-- `shared/` – Współdzielone modele danych i typy wiadomości.
+Aktualna wersja wymaga tokenu autoryzacyjnego dla:
 
----
+- polaczenia WebSocket: `/ws?token=...`
+- uploadu streamu: `Authorization: Bearer <token>`
+- downloadu streamu: `Authorization: Bearer <token>`
 
-## Konfiguracja i Uruchomienie 🛠️
+Serwer nie wypisuje tokenu w logach. Pliki `server_token.txt`, `client_token.txt`, `.env`, `shared_files/` i `target/` sa ignorowane przez git.
 
-### 1. Uruchomienie Serwera (Relay)
-Uruchom konsolę w głównym katalogu projektu i wpisz:
+Klient dodatkowo sprawdza sciezki plikow przed wyslaniem:
+
+- blokuje sciezki absolutne,
+- blokuje `..`,
+- blokuje odczyt spoza katalogu udostepniania po `canonicalize`.
+
+Do uzycia poza lokalna siecia ustaw reverse proxy z TLS i korzystaj z `wss://`/`https://`. Token w adresie WebSocket moze trafic do logow proxy, dlatego w publicznym wdrozeniu logi URL powinny byc ograniczone.
+
+## Wymagania
+
+- Rust stable z Cargo
+- Windows, Linux albo macOS
+
+Instalacja Rust:
+
+```bash
+https://rustup.rs
+```
+
+## Budowanie i sprawdzanie
+
+```bash
+cargo check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+## Konfiguracja serwera
+
+Serwer potrzebuje tokenu. Mozesz podac go przez zmienna srodowiskowa:
+
+PowerShell:
+
+```powershell
+$env:SERVER_TOKEN="wklej_tutaj_dlugi_losowy_token"
+cargo run -p server
+```
+
+Linux/macOS:
+
+```bash
+SERVER_TOKEN="wklej_tutaj_dlugi_losowy_token" cargo run -p server
+```
+
+Jesli `SERVER_TOKEN` nie jest ustawiony, serwer uzyje pliku `server_token.txt`. Gdy plik nie istnieje, wygeneruje nowy token i zapisze go w `server_token.txt`.
+
+Domyslnie serwer nasluchuje na:
+
+```text
+0.0.0.0:3000
+```
+
+## Konfiguracja klienta
+
+Klient potrzebuje tego samego tokenu co serwer.
+
+Opcja 1: zmienna srodowiskowa:
+
+PowerShell:
+
+```powershell
+$env:SERVER_TOKEN="ten_sam_token_co_na_serwerze"
+$env:SERVER_URL="127.0.0.1:3000"
+$env:SHARED_DIR="C:\sciezka\do\folderu"
+cargo run -p client
+```
+
+Linux/macOS:
+
+```bash
+SERVER_TOKEN="ten_sam_token_co_na_serwerze" SERVER_URL="127.0.0.1:3000" SHARED_DIR="/home/user/pliki" cargo run -p client
+```
+
+Opcja 2: plik `client_token.txt` w katalogu glownym projektu:
+
+```text
+ten_sam_token_co_na_serwerze
+```
+
+Jesli `SHARED_DIR` nie jest ustawiony, klient uzyje folderu:
+
+```text
+./shared_files
+```
+
+Jesli `SERVER_URL` nie jest ustawiony, klient laczy sie z:
+
+```text
+127.0.0.1:3000
+```
+
+## Uruchomienie lokalne
+
+1. Uruchom serwer:
+
 ```bash
 cargo run -p server
 ```
-Przy pierwszym uruchomieniu serwer wygeneruje **nowy, bezpieczny token** autoryzacyjny i wyświetli go w konsoli. Zapisze go również w pliku `server_token.txt`.
 
-### 2. Konfiguracja Klienta
-Zanim uruchomisz aplikację Klienta, musisz mu podać token oraz wskazać folder do udostępniania.
-- Stwórz plik `client_token.txt` w głównym folderze i wklej do niego wygenerowany wcześniej token.
-- (Opcjonalnie) Stwórz folder `shared_files` i wrzuć tam jakiekolwiek pliki do udostępnienia (domyślnie użyje `./shared_files`).
+2. Skopiuj token z `server_token.txt` do `client_token.txt` albo ustaw `SERVER_TOKEN`.
 
-### 3. Uruchomienie Klienta
-Otwórz drugie okno konsoli i uruchom agenta:
+3. Utworz folder z plikami:
+
+```bash
+mkdir shared_files
+```
+
+4. Uruchom klienta:
+
 ```bash
 cargo run -p client
 ```
-Klient połączy się z serwerem po WebSockets (`ws://127.0.0.1:3000/ws`), zautoryzuje się Twoim tokenem i przekaże indeks dostępnych plików. Jeśli inny klient poprosi o plik, ten komputer prześle go strumieniowo HTTP POST bezpośrednio do serwera.
 
-## Zmienne środowiskowe
-Zarówno dla serwera jak i klienta możesz sterować procesem za pomocą zmiennych środowiskowych:
-* `SERVER_TOKEN` – Omijanie pliku .txt i podanie tokenu z pamięci (dla klienta).
-* `SHARED_DIR` – Wskazanie bezwzględnej ścieżki do współdzielonego katalogu, np. `SHARED_DIR="D:\Filmy" cargo run -p client`.
-* `RUST_LOG=debug` – Logowanie diagnostyczne.
+5. Uruchom drugi klient na innym komputerze albo w innym katalogu roboczym z tym samym tokenem i `SERVER_URL` wskazujacym serwer.
+
+## Zmienne srodowiskowe
+
+- `SERVER_TOKEN` - token autoryzacyjny dla serwera i klienta.
+- `SERVER_URL` - adres serwera dla klienta, domyslnie `127.0.0.1:3000`.
+- `SHARED_DIR` - katalog udostepnianych plikow dla klienta, domyslnie `./shared_files`.
+- `RUST_LOG` - poziom logowania, np. `debug`.
+
+Przyklad:
+
+```bash
+RUST_LOG=debug cargo run -p server
+```
+
+## Uwagi operacyjne
+
+- Nie commituj tokenow ani prywatnych plikow.
+- Nie wystawiaj serwera publicznie bez TLS i kontroli logow.
+- Kazdy klient z poprawnym tokenem moze prosic innych klientow o udostepnione pliki, wiec traktuj token jak sekret administracyjny.
