@@ -80,6 +80,15 @@ async fn main() -> anyhow::Result<()> {
                             continue;
                         }
 
+                        // 1. ZABEZPIECZENIE STRUKTURALNE (Defense in Depth):
+                        // Blokujemy z góry ścieżki, które zawierają ".." (cofanie katalogów), 
+                        // zaczynają się od ukośnika (ścieżki absolutne z roota na Linux/Mac) 
+                        // lub zawierają odniesienia do dysków Windows (np. C:, D:)
+                        if file_path.contains("..") || file_path.starts_with('/') || file_path.starts_with('\\') || file_path.contains(':') {
+                            warn!("Niedozwolona struktura ścieżki pliku (próba ataku): {}", file_path);
+                            continue;
+                        }
+
                         let mut full_path = PathBuf::from(shared_dir.as_str());
                         full_path.push(&file_path);
 
