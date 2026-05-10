@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn read_server_commands(state: Arc<AppState>) {
-    info!("Komendy serwera: download <client_id> <file_path>, help");
+    info!("Komendy serwera: clients, download <client_id> <file_path>, help");
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
@@ -124,7 +124,12 @@ async fn read_server_commands(state: Arc<AppState>) {
         }
 
         if line.eq_ignore_ascii_case("help") {
-            info!("Uzycie: download <client_id> <file_path>");
+            info!("Komendy: clients, download <client_id> <file_path>");
+            continue;
+        }
+
+        if line.eq_ignore_ascii_case("clients") {
+            list_connected_clients(&state).await;
             continue;
         }
 
@@ -144,6 +149,25 @@ async fn read_server_commands(state: Arc<AppState>) {
             file_path.replace('\\', "/"),
         )
         .await;
+    }
+}
+
+async fn list_connected_clients(state: &Arc<AppState>) {
+    let clients = state.clients.read().await;
+    let folders = state.folders.read().await;
+
+    if clients.is_empty() {
+        info!("Brak polaczonych klientow");
+        return;
+    }
+
+    info!("Polaczeni klienci:");
+    for client_id in clients.keys() {
+        let file_count = folders
+            .get(client_id)
+            .map(|folder| folder.files.len())
+            .unwrap_or(0);
+        info!("- {} ({} plikow)", client_id, file_count);
     }
 }
 

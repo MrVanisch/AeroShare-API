@@ -173,6 +173,12 @@ download <client_id> <file_path>
 
 Serwer zapisze takie pliki w `./server_downloads`.
 
+Aby wypisac polaczonych klientow w konsoli serwera:
+
+```text
+clients
+```
+
 ## Zmienne srodowiskowe
 
 - `SERVER_TOKEN` - token autoryzacyjny dla serwera i klienta.

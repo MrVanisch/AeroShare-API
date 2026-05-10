@@ -175,6 +175,12 @@ download <client_id> <file_path>
 
 The server saves those files in `./server_downloads`.
 
+To list connected clients from the server console:
+
+```text
+clients
+```
+
 ## Environment Variables
 
 - `SERVER_TOKEN` - authorization token used by the server and client.
