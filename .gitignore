@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Pliki z kluczami i tokenami (nie dodajemy do repo!)
+server_token.txt
+client_token.txt
+.env
+
+# Foldery z danymi
+shared_files/
