@@ -1,41 +1,43 @@
 # AeroShare API
 
-AeroShare API to aplikacja do udostepniania plikow przez serwer relay. Projekt jest napisany w Rust i sklada sie z trzech czesci:
+English documentation is the main README. Polish documentation is available in [README.pl.md](README.pl.md).
 
-- `server` - serwer WebSocket/HTTP, ktory rejestruje klientow i posredniczy w streamingu plikow.
-- `client` - klient, ktory indeksuje lokalny folder, laczy sie z serwerem i wysyla/pobiera pliki.
-- `shared` - wspolne typy wiadomosci uzywane przez klienta i serwer.
+AeroShare API is a Rust file-sharing application that uses a relay server. The project is split into three workspace crates:
 
-## Bezpieczenstwo
+- `server` - WebSocket/HTTP relay server that registers clients and streams file data between them.
+- `client` - client application that indexes a local shared folder, connects to the server, and uploads/downloads files.
+- `shared` - shared message types used by both the server and the client.
 
-Aktualna wersja wymaga tokenu autoryzacyjnego dla:
+## Security
 
-- polaczenia WebSocket: `/ws?token=...`
-- uploadu streamu: `Authorization: Bearer <token>`
-- downloadu streamu: `Authorization: Bearer <token>`
+The current version requires an authorization token for:
 
-Serwer nie wypisuje tokenu w logach. Pliki `server_token.txt`, `client_token.txt`, `.env`, `shared_files/` i `target/` sa ignorowane przez git.
+- WebSocket connections: `/ws?token=...`
+- stream uploads: `Authorization: Bearer <token>`
+- stream downloads: `Authorization: Bearer <token>`
 
-Klient dodatkowo sprawdza sciezki plikow przed wyslaniem:
+The server does not print the token in logs. `server_token.txt`, `client_token.txt`, `.env`, `shared_files/`, and `target/` are ignored by git.
 
-- blokuje sciezki absolutne,
-- blokuje `..`,
-- blokuje odczyt spoza katalogu udostepniania po `canonicalize`.
+The client also validates file paths before reading files:
 
-Do uzycia poza lokalna siecia ustaw reverse proxy z TLS i korzystaj z `wss://`/`https://`. Token w adresie WebSocket moze trafic do logow proxy, dlatego w publicznym wdrozeniu logi URL powinny byc ograniczone.
+- absolute paths are rejected,
+- `..` path traversal is rejected,
+- `canonicalize` is used to block reads outside the configured shared directory.
 
-## Wymagania
+For use outside a local network, put the server behind a TLS reverse proxy and use `wss://`/`https://`. The WebSocket token is currently passed in the URL query string, so proxy URL logging should be restricted in public deployments.
 
-- Rust stable z Cargo
-- Windows, Linux albo macOS
+## Requirements
 
-Instalacja Rust:
+- Rust stable with Cargo
+- Windows, Linux, or macOS
 
-```bash
+Install Rust from:
+
+```text
 https://rustup.rs
 ```
 
-## Budowanie i sprawdzanie
+## Build And Verify
 
 ```bash
 cargo check
@@ -43,109 +45,109 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-## Konfiguracja serwera
+## Server Configuration
 
-Serwer potrzebuje tokenu. Mozesz podac go przez zmienna srodowiskowa:
+The server needs an authorization token. You can provide it through an environment variable.
 
 PowerShell:
 
 ```powershell
-$env:SERVER_TOKEN="wklej_tutaj_dlugi_losowy_token"
+$env:SERVER_TOKEN="paste_a_long_random_token_here"
 cargo run -p server
 ```
 
 Linux/macOS:
 
 ```bash
-SERVER_TOKEN="wklej_tutaj_dlugi_losowy_token" cargo run -p server
+SERVER_TOKEN="paste_a_long_random_token_here" cargo run -p server
 ```
 
-Jesli `SERVER_TOKEN` nie jest ustawiony, serwer uzyje pliku `server_token.txt`. Gdy plik nie istnieje, wygeneruje nowy token i zapisze go w `server_token.txt`.
+If `SERVER_TOKEN` is not set, the server uses `server_token.txt`. If that file does not exist, the server generates a new token and writes it to `server_token.txt`.
 
-Domyslnie serwer nasluchuje na:
+By default, the server listens on:
 
 ```text
 0.0.0.0:3000
 ```
 
-## Konfiguracja klienta
+## Client Configuration
 
-Klient potrzebuje tego samego tokenu co serwer.
+The client must use the same token as the server.
 
-Opcja 1: zmienna srodowiskowa:
+Option 1: environment variables.
 
 PowerShell:
 
 ```powershell
-$env:SERVER_TOKEN="ten_sam_token_co_na_serwerze"
+$env:SERVER_TOKEN="same_token_as_the_server"
 $env:SERVER_URL="127.0.0.1:3000"
-$env:SHARED_DIR="C:\sciezka\do\folderu"
+$env:SHARED_DIR="C:\path\to\folder"
 cargo run -p client
 ```
 
 Linux/macOS:
 
 ```bash
-SERVER_TOKEN="ten_sam_token_co_na_serwerze" SERVER_URL="127.0.0.1:3000" SHARED_DIR="/home/user/pliki" cargo run -p client
+SERVER_TOKEN="same_token_as_the_server" SERVER_URL="127.0.0.1:3000" SHARED_DIR="/home/user/files" cargo run -p client
 ```
 
-Opcja 2: plik `client_token.txt` w katalogu glownym projektu:
+Option 2: create `client_token.txt` in the project root:
 
 ```text
-ten_sam_token_co_na_serwerze
+same_token_as_the_server
 ```
 
-Jesli `SHARED_DIR` nie jest ustawiony, klient uzyje folderu:
+If `SHARED_DIR` is not set, the client uses:
 
 ```text
 ./shared_files
 ```
 
-Jesli `SERVER_URL` nie jest ustawiony, klient laczy sie z:
+If `SERVER_URL` is not set, the client connects to:
 
 ```text
 127.0.0.1:3000
 ```
 
-## Uruchomienie lokalne
+## Local Usage
 
-1. Uruchom serwer:
+1. Start the server:
 
 ```bash
 cargo run -p server
 ```
 
-2. Skopiuj token z `server_token.txt` do `client_token.txt` albo ustaw `SERVER_TOKEN`.
+2. Copy the token from `server_token.txt` to `client_token.txt`, or set `SERVER_TOKEN`.
 
-3. Utworz folder z plikami:
+3. Create a folder with files to share:
 
 ```bash
 mkdir shared_files
 ```
 
-4. Uruchom klienta:
+4. Start the client:
 
 ```bash
 cargo run -p client
 ```
 
-5. Uruchom drugi klient na innym komputerze albo w innym katalogu roboczym z tym samym tokenem i `SERVER_URL` wskazujacym serwer.
+5. Start a second client on another machine or in another working directory with the same token and a `SERVER_URL` that points to the server.
 
-## Zmienne srodowiskowe
+## Environment Variables
 
-- `SERVER_TOKEN` - token autoryzacyjny dla serwera i klienta.
-- `SERVER_URL` - adres serwera dla klienta, domyslnie `127.0.0.1:3000`.
-- `SHARED_DIR` - katalog udostepnianych plikow dla klienta, domyslnie `./shared_files`.
-- `RUST_LOG` - poziom logowania, np. `debug`.
+- `SERVER_TOKEN` - authorization token used by the server and client.
+- `SERVER_URL` - server address used by the client, defaults to `127.0.0.1:3000`.
+- `SHARED_DIR` - client directory to share, defaults to `./shared_files`.
+- `RUST_LOG` - log level, for example `debug`.
 
-Przyklad:
+Example:
 
 ```bash
 RUST_LOG=debug cargo run -p server
 ```
 
-## Uwagi operacyjne
+## Operational Notes
 
-- Nie commituj tokenow ani prywatnych plikow.
-- Nie wystawiaj serwera publicznie bez TLS i kontroli logow.
-- Kazdy klient z poprawnym tokenem moze prosic innych klientow o udostepnione pliki, wiec traktuj token jak sekret administracyjny.
+- Do not commit tokens or private files.
+- Do not expose the server publicly without TLS and controlled logging.
+- Any client with the valid token can request files from other connected clients, so treat the token as an administrative secret.
