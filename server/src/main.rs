@@ -137,8 +137,9 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>, token: Strin
                         let clients_read = state_clone.clients.read().await;
                         
                         if let Some(target_tx) = clients_read.get(&target_client_id) {
-                            // Rejestrujemy kanał dla strumieniowania pliku (buffer: 64 kawałki)
-                            let (stream_tx, stream_rx) = mpsc::channel(64);
+                            // Zwiększony bufor kanału w pamięci (1024 zamiast 64 paczek). 
+                            // Równoważy tymczasowe spowolnienia na łączach/dyskach, utrzymując transfer z maksymalną prędkością.
+                            let (stream_tx, stream_rx) = mpsc::channel(1024);
                             state_clone.streams.write().await.insert(stream_id.clone(), stream_tx);
 
                             // Informujemy żądającego klienta skąd ma pobrać plik
@@ -221,7 +222,7 @@ async fn handle_download(
 ) -> impl IntoResponse {
     // Sprawdzamy czy stream istnieje. Uwaga: Musimy poczekać aż upload założy kanał.
     // Kanał jest zakładany ZANIM upload się zacznie, podczas RequestDownload.
-    let (tx, mut rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(64);
+    let (tx, mut rx) = mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(1024);
     
     // Podmieniamy nadajnik w mapie na taki, który będzie wysyłał tutaj
     let mut streams = state.streams.write().await;

@@ -110,12 +110,15 @@ async fn main() -> anyhow::Result<()> {
                         tokio::spawn(async move {
                             match File::open(&full_path).await {
                                 Ok(file) => {
-                                    let stream = ReaderStream::new(file);
+                                    // OPTYMALIZACJA WYDAJNOŚCIOWA:
+                                    // Zamiast standardowych paczek dyskowych ~8KB, wymuszamy wczytywanie dużych porcji danych 256KB z dysku.
+                                    // Minimalizuje to narzut systemowy podczas strumieniowania bardzo wielkich plików.
+                                    let mut reader_stream = tokio_util::io::ReaderStream::with_capacity(file, 256 * 1024);
                                     let upload_url = format!("http://{}/stream/{}", server_url_clone, stream_id);
                                     info!("Strumieniowanie pliku do: {}", upload_url);
                                     
                                     let res = http_client_clone.post(&upload_url)
-                                        .body(reqwest::Body::wrap_stream(stream))
+                                        .body(reqwest::Body::wrap_stream(reader_stream))
                                         .send()
                                         .await;
                                         
@@ -152,14 +155,21 @@ async fn main() -> anyhow::Result<()> {
                                         
                                     let file_path = downloads_dir.join(safe_file_name);
                                     
-                                    if let Ok(mut file) = tokio::fs::File::create(&file_path).await {
+                                    if let Ok(file) = tokio::fs::File::create(&file_path).await {
                                         use tokio::io::AsyncWriteExt;
+                                        
+                                        // OPTYMALIZACJA WYDAJNOŚCIOWA: 
+                                        // BufWriter łączy małe paczki odbierane z sieci w jeden ogromny blok 256KB, 
+                                        // zanim fizycznie każe dyskowi go zapisać. Piekielnie przyśpiesza to dyski HDD i słabsze SSD.
+                                        let mut buf_writer = tokio::io::BufWriter::with_capacity(256 * 1024, file);
+                                        
                                         while let Ok(Some(chunk)) = response.chunk().await {
-                                            if file.write_all(&chunk).await.is_err() {
+                                            if buf_writer.write_all(&chunk).await.is_err() {
                                                 error!("Błąd zapisu pliku na dysk!");
                                                 break;
                                             }
                                         }
+                                        let _ = buf_writer.flush().await; // Pamiętaj o opróżnieniu bufora na końcu!
                                         info!("Pomyślnie zapisano plik: {:?}", file_path);
                                     } else {
                                         error!("Nie można utworzyć pliku: {:?}", file_path);
