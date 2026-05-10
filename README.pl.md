@@ -24,6 +24,8 @@ Klient dodatkowo sprawdza sciezki plikow przed wyslaniem:
 
 Do uzycia poza lokalna siecia ustaw reverse proxy z TLS i korzystaj z `wss://`/`https://`. Token w adresie WebSocket moze trafic do logow proxy, dlatego w publicznym wdrozeniu logi URL powinny byc ograniczone.
 
+Serwer moze tez udostepniac pliki z `SERVER_SHARED_DIR` jako specjalny cel pobierania `server`.
+
 ## Wymagania
 
 - Rust stable z Cargo
@@ -66,6 +68,12 @@ Domyslnie serwer nasluchuje na:
 
 ```text
 0.0.0.0:5000
+```
+
+Pliki udostepniane przez serwer sa czytane z:
+
+```text
+./server_files
 ```
 
 ## Konfiguracja klienta
@@ -145,10 +153,17 @@ download 8f3c2f6a-0f6d-4c57-9c6e-cf7f9d6f4b1a test.txt
 
 Klient pobierajacy zapisze plik w `./downloads`.
 
+Aby pobrac plik z folderu serwera, wpisz:
+
+```text
+download server test.txt
+```
+
 ## Zmienne srodowiskowe
 
 - `SERVER_TOKEN` - token autoryzacyjny dla serwera i klienta.
 - `SERVER_BIND` - adres nasluchiwania serwera, domyslnie `0.0.0.0:5000`.
+- `SERVER_SHARED_DIR` - folder plikow udostepnianych przez serwer, domyslnie `./server_files`.
 - `SERVER_URL` - adres serwera dla klienta, domyslnie `127.0.0.1:5000`.
 - `SHARED_DIR` - katalog udostepnianych plikow dla klienta, domyslnie `./shared_files`.
 - `RUST_LOG` - poziom logowania, np. `debug`.

@@ -13,7 +13,13 @@ use futures_util::{sink::SinkExt, stream::StreamExt};
 use http_body_util::BodyExt;
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Deserialize;
-use std::{collections::HashMap, env, fs, sync::Arc};
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::{Component, Path as StdPath, PathBuf},
+    sync::Arc,
+};
+use tokio::io::AsyncReadExt;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
@@ -31,6 +37,7 @@ struct AppState {
     clients: RwLock<HashMap<String, mpsc::Sender<ServerMessage>>>,
     folders: RwLock<HashMap<String, SharedFolder>>,
     streams: RwLock<HashMap<String, StreamEntry>>,
+    server_shared_dir: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -66,12 +73,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     info!("Serwer uruchomiony z wlaczona autoryzacja tokenem");
+    let server_shared_dir =
+        PathBuf::from(env::var("SERVER_SHARED_DIR").unwrap_or_else(|_| "./server_files".into()));
+    fs::create_dir_all(&server_shared_dir)?;
+    info!("Folder plikow serwera: {:?}", server_shared_dir);
 
     let state = Arc::new(AppState {
         auth_token: token,
         clients: RwLock::new(HashMap::new()),
         folders: RwLock::new(HashMap::new()),
         streams: RwLock::new(HashMap::new()),
+        server_shared_dir,
     });
 
     let app = Router::new()
@@ -194,6 +206,11 @@ async fn request_download(
     target_client_id: String,
     file_path: String,
 ) {
+    if target_client_id.eq_ignore_ascii_case("server") {
+        request_server_file_download(state, requester_tx, file_path).await;
+        return;
+    }
+
     let clients_read = state.clients.read().await;
     let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
         let _ = requester_tx
@@ -243,6 +260,114 @@ async fn request_download(
     }
 }
 
+async fn request_server_file_download(
+    state: &Arc<AppState>,
+    requester_tx: &mpsc::Sender<ServerMessage>,
+    file_path: String,
+) {
+    if !is_safe_relative_path(&file_path) {
+        let _ = requester_tx
+            .send(ServerMessage::Error {
+                message: "Niedozwolona sciezka pliku serwera".into(),
+            })
+            .await;
+        return;
+    }
+
+    let mut full_path = state.server_shared_dir.clone();
+    full_path.push(&file_path);
+
+    let shared_dir_canon = match fs::canonicalize(&state.server_shared_dir) {
+        Ok(path) => path,
+        Err(e) => {
+            error!("Nie mozna zweryfikowac folderu plikow serwera: {}", e);
+            let _ = requester_tx
+                .send(ServerMessage::Error {
+                    message: "Folder plikow serwera jest niedostepny".into(),
+                })
+                .await;
+            return;
+        }
+    };
+
+    let is_safe = match fs::canonicalize(&full_path) {
+        Ok(canon_path) => canon_path.starts_with(&shared_dir_canon),
+        Err(_) => false,
+    };
+
+    if !is_safe {
+        let _ = requester_tx
+            .send(ServerMessage::Error {
+                message: "Plik serwera nie istnieje albo jest poza folderem".into(),
+            })
+            .await;
+        return;
+    }
+
+    let stream_id = uuid::Uuid::new_v4().to_string();
+    let (stream_tx, stream_rx) = mpsc::channel(1024);
+    state.streams.write().await.insert(
+        stream_id.clone(),
+        StreamEntry {
+            sender: Some(stream_tx.clone()),
+            receiver: Some(stream_rx),
+        },
+    );
+
+    let file_name = PathBuf::from(&file_path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let _ = requester_tx
+        .send(ServerMessage::DownloadReady {
+            stream_id: stream_id.clone(),
+            file_name,
+        })
+        .await;
+
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = stream_server_file(full_path, stream_tx).await {
+            error!("Blad streamingu pliku serwera: {}", e);
+        }
+
+        let mut streams = state_clone.streams.write().await;
+        if let Some(entry) = streams.get_mut(&stream_id) {
+            entry.sender = None;
+            if entry.receiver.is_none() {
+                streams.remove(&stream_id);
+            }
+        }
+    });
+}
+
+async fn stream_server_file(
+    full_path: PathBuf,
+    sender: mpsc::Sender<StreamChunk>,
+) -> anyhow::Result<()> {
+    let mut file = tokio::fs::File::open(full_path).await?;
+    let mut buffer = vec![0_u8; 256 * 1024];
+
+    loop {
+        let bytes_read = file.read(&mut buffer).await?;
+        if bytes_read == 0 {
+            break;
+        }
+
+        if sender
+            .send(Ok(Bytes::copy_from_slice(&buffer[..bytes_read])))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
 async fn cleanup_client(state: &Arc<AppState>, client_id: &str) {
     state.clients.write().await.remove(client_id);
     state.folders.write().await.remove(client_id);
@@ -254,6 +379,13 @@ fn is_authorized(headers: &HeaderMap, state: &AppState) -> bool {
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == expected)
+}
+
+fn is_safe_relative_path(file_path: &str) -> bool {
+    !file_path.is_empty()
+        && StdPath::new(file_path)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 async fn handle_upload(

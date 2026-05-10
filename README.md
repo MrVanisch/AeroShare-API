@@ -26,6 +26,8 @@ The client also validates file paths before reading files:
 
 For use outside a local network, put the server behind a TLS reverse proxy and use `wss://`/`https://`. The WebSocket token is currently passed in the URL query string, so proxy URL logging should be restricted in public deployments.
 
+The server can also expose files from `SERVER_SHARED_DIR` as the special download target `server`.
+
 ## Requirements
 
 - Rust stable with Cargo
@@ -68,6 +70,12 @@ By default, the server listens on:
 
 ```text
 0.0.0.0:5000
+```
+
+Server-hosted files are read from:
+
+```text
+./server_files
 ```
 
 ## Client Configuration
@@ -147,10 +155,17 @@ download 8f3c2f6a-0f6d-4c57-9c6e-cf7f9d6f4b1a test.txt
 
 The requesting client saves downloaded files in `./downloads`.
 
+To download from the server's own shared folder, use:
+
+```text
+download server test.txt
+```
+
 ## Environment Variables
 
 - `SERVER_TOKEN` - authorization token used by the server and client.
 - `SERVER_BIND` - server bind address, defaults to `0.0.0.0:5000`.
+- `SERVER_SHARED_DIR` - server-side shared directory, defaults to `./server_files`.
 - `SERVER_URL` - server address used by the client, defaults to `127.0.0.1:5000`.
 - `SHARED_DIR` - client directory to share, defaults to `./shared_files`.
 - `RUST_LOG` - log level, for example `debug`.
