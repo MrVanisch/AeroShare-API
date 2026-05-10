@@ -82,7 +82,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    let bind_addr = env::var("SERVER_BIND").unwrap_or_else(|_| "0.0.0.0:5000".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     info!("Serwer nasluchuje na {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
 

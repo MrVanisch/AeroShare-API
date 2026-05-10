@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     }
     info!("Zaindeksowano {} plikow", files.len());
 
-    let server_url = env::var("SERVER_URL").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let server_url = env::var("SERVER_URL").unwrap_or_else(|_| "127.0.0.1:5000".to_string());
     let ws_url = format!("ws://{}/ws?token={}", server_url, token);
     info!("Laczenie do serwera WS: {}", server_url);
 

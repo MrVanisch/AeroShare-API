@@ -67,7 +67,7 @@ If `SERVER_TOKEN` is not set, the server uses `server_token.txt`. If that file d
 By default, the server listens on:
 
 ```text
-0.0.0.0:3000
+0.0.0.0:5000
 ```
 
 ## Client Configuration
@@ -80,7 +80,7 @@ PowerShell:
 
 ```powershell
 $env:SERVER_TOKEN="same_token_as_the_server"
-$env:SERVER_URL="127.0.0.1:3000"
+$env:SERVER_URL="127.0.0.1:5000"
 $env:SHARED_DIR="C:\path\to\folder"
 cargo run -p client
 ```
@@ -88,7 +88,7 @@ cargo run -p client
 Linux/macOS:
 
 ```bash
-SERVER_TOKEN="same_token_as_the_server" SERVER_URL="127.0.0.1:3000" SHARED_DIR="/home/user/files" cargo run -p client
+SERVER_TOKEN="same_token_as_the_server" SERVER_URL="127.0.0.1:5000" SHARED_DIR="/home/user/files" cargo run -p client
 ```
 
 Option 2: create `client_token.txt` in the project root:
@@ -106,7 +106,7 @@ If `SHARED_DIR` is not set, the client uses:
 If `SERVER_URL` is not set, the client connects to:
 
 ```text
-127.0.0.1:3000
+127.0.0.1:5000
 ```
 
 ## Local Usage
@@ -136,7 +136,8 @@ cargo run -p client
 ## Environment Variables
 
 - `SERVER_TOKEN` - authorization token used by the server and client.
-- `SERVER_URL` - server address used by the client, defaults to `127.0.0.1:3000`.
+- `SERVER_BIND` - server bind address, defaults to `0.0.0.0:5000`.
+- `SERVER_URL` - server address used by the client, defaults to `127.0.0.1:5000`.
 - `SHARED_DIR` - client directory to share, defaults to `./shared_files`.
 - `RUST_LOG` - log level, for example `debug`.
 
