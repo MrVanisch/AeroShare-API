@@ -163,11 +163,18 @@ async fn list_connected_clients(state: &Arc<AppState>) {
 
     println!("Polaczeni klienci:");
     for client_id in clients.keys() {
-        let file_count = folders
-            .get(client_id)
-            .map(|folder| folder.files.len())
-            .unwrap_or(0);
-        println!("- {} ({} plikow)", client_id, file_count);
+        if let Some(folder) = folders.get(client_id) {
+            println!("- {} ({} plikow)", client_id, folder.files.len());
+            if folder.files.is_empty() {
+                println!("  brak plikow");
+            } else {
+                for file in &folder.files {
+                    println!("  - {} ({} B)", file.path, file.size);
+                }
+            }
+        } else {
+            println!("- {} (brak zarejestrowanej listy plikow)", client_id);
+        }
     }
 }
 
