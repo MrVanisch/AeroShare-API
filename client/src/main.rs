@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 use tokio::fs::File;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use tracing::{error, info, warn};
 
@@ -64,6 +65,50 @@ async fn main() -> anyhow::Result<()> {
     write
         .send(Message::Text(serde_json::to_string(&reg_msg)?))
         .await?;
+
+    info!("Komendy: download <client_id> <file_path>, help");
+
+    tokio::spawn(async move {
+        let stdin = BufReader::new(tokio::io::stdin());
+        let mut lines = stdin.lines();
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            if line.eq_ignore_ascii_case("help") {
+                info!("Uzycie: download <client_id> <file_path>");
+                continue;
+            }
+
+            let mut parts = line.splitn(3, ' ');
+            let command = parts.next().unwrap_or_default();
+            let target_client_id = parts.next().unwrap_or_default().trim();
+            let file_path = parts.next().unwrap_or_default().trim();
+
+            if command != "download" || target_client_id.is_empty() || file_path.is_empty() {
+                warn!("Nieznana komenda. Uzycie: download <client_id> <file_path>");
+                continue;
+            }
+
+            let msg = ClientMessage::RequestDownload {
+                target_client_id: target_client_id.to_string(),
+                file_path: file_path.replace('\\', "/"),
+            };
+
+            match serde_json::to_string(&msg) {
+                Ok(json) => {
+                    if write.send(Message::Text(json)).await.is_err() {
+                        error!("Nie mozna wyslac komendy pobierania do serwera");
+                        break;
+                    }
+                }
+                Err(e) => error!("Nie mozna przygotowac komendy pobierania: {}", e),
+            }
+        }
+    });
 
     let http_client = Client::new();
     let shared_dir = Arc::new(shared_dir);

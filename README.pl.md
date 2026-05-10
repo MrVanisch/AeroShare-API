@@ -131,6 +131,20 @@ cargo run -p client
 
 5. Uruchom drugi klient na innym komputerze albo w innym katalogu roboczym z tym samym tokenem i `SERVER_URL` wskazujacym serwer.
 
+6. Aby pobrac plik od innego podlaczonego klienta, wpisz w kliencie:
+
+```text
+download <client_id> <file_path>
+```
+
+Przyklad:
+
+```text
+download 8f3c2f6a-0f6d-4c57-9c6e-cf7f9d6f4b1a test.txt
+```
+
+Klient pobierajacy zapisze plik w `./downloads`.
+
 ## Zmienne srodowiskowe
 
 - `SERVER_TOKEN` - token autoryzacyjny dla serwera i klienta.

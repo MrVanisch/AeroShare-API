@@ -133,6 +133,20 @@ cargo run -p client
 
 5. Start a second client on another machine or in another working directory with the same token and a `SERVER_URL` that points to the server.
 
+6. To download a file from another connected client, use the client command:
+
+```text
+download <client_id> <file_path>
+```
+
+Example:
+
+```text
+download 8f3c2f6a-0f6d-4c57-9c6e-cf7f9d6f4b1a test.txt
+```
+
+The requesting client saves downloaded files in `./downloads`.
+
 ## Environment Variables
 
 - `SERVER_TOKEN` - authorization token used by the server and client.
