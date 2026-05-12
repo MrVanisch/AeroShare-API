@@ -186,9 +186,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                     ServerMessage::ClientsList { clients } => {
                         if clients.is_empty() {
-                            info!("No connected clients");
+                            info!("No available targets");
                         } else {
-                            info!("Connected clients:");
+                            info!("Available targets:");
                             for client in clients {
                                 info!("- {} ({} files)", client.client_id, client.files_count);
                             }

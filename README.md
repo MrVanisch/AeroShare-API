@@ -78,6 +78,8 @@ Server-hosted files are read from:
 ./server_files
 ```
 
+The server logs the exact absolute path at startup. If `server-files` or `files server` is empty, put the files in that logged directory or set `SERVER_SHARED_DIR`.
+
 Files downloaded by the server console are written to:
 
 ```text
@@ -192,6 +194,8 @@ To list connected clients from the server console:
 ```text
 clients
 ```
+
+The `clients` command also includes the special `server` target and its file count.
 
 ## Environment Variables
 

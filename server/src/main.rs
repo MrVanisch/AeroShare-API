@@ -77,11 +77,13 @@ async fn main() -> anyhow::Result<()> {
     let server_shared_dir =
         PathBuf::from(env::var("SERVER_SHARED_DIR").unwrap_or_else(|_| "./server_files".into()));
     fs::create_dir_all(&server_shared_dir)?;
+    let server_shared_dir = fs::canonicalize(&server_shared_dir)?;
     info!("Server shared folder: {:?}", server_shared_dir);
     let server_download_dir = PathBuf::from(
         env::var("SERVER_DOWNLOAD_DIR").unwrap_or_else(|_| "./server_downloads".into()),
     );
     fs::create_dir_all(&server_download_dir)?;
+    let server_download_dir = fs::canonicalize(&server_download_dir)?;
     info!("Server download folder: {:?}", server_download_dir);
 
     let state = Arc::new(AppState {
@@ -171,6 +173,23 @@ async fn read_server_commands(state: Arc<AppState>) {
 async fn list_connected_clients(state: &Arc<AppState>) {
     let clients = state.clients.read().await;
     let folders = state.folders.read().await;
+    let server_files = match collect_server_files(state) {
+        Ok(files) => files,
+        Err(e) => {
+            println!("Error listing server files: {}", e);
+            Vec::new()
+        }
+    };
+
+    println!("Available targets:");
+    println!("- server ({} files)", server_files.len());
+    if server_files.is_empty() {
+        println!("  no files");
+    } else {
+        for file in &server_files {
+            println!("  - {} ({} B)", file.path, file.size);
+        }
+    }
 
     if clients.is_empty() {
         println!("No connected clients");
@@ -423,18 +442,28 @@ async fn request_download(
 }
 
 async fn send_clients_list(state: &Arc<AppState>, requester_tx: &mpsc::Sender<ServerMessage>) {
-    let clients = state.clients.read().await;
+    let connected_clients = state.clients.read().await;
     let folders = state.folders.read().await;
-    let clients = clients
-        .keys()
-        .map(|client_id| ClientInfo {
+    let server_files_count = match collect_server_files(state) {
+        Ok(files) => files.len(),
+        Err(e) => {
+            error!("Could not list server files for clients command: {}", e);
+            0
+        }
+    };
+    let mut clients = vec![ClientInfo {
+        client_id: "server".into(),
+        files_count: server_files_count,
+    }];
+    clients.extend(connected_clients.keys().map(|client_id| {
+        ClientInfo {
             client_id: client_id.clone(),
             files_count: folders
                 .get(client_id)
                 .map(|folder| folder.files.len())
                 .unwrap_or_default(),
-        })
-        .collect();
+        }
+    }));
 
     let _ = requester_tx
         .send(ServerMessage::ClientsList { clients })
