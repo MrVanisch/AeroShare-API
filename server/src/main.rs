@@ -333,7 +333,27 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let state_clone = state.clone();
     let cid = client_id.clone();
     let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(Message::Text(text))) = receiver.next().await {
+        while let Some(msg) = receiver.next().await {
+            let text = match msg {
+                Ok(Message::Text(text)) => text,
+                Ok(Message::Close(frame)) => {
+                    if let Some(frame) = frame {
+                        info!(
+                            "Client {} closed the connection: {} ({})",
+                            cid, frame.reason, frame.code
+                        );
+                    } else {
+                        info!("Client {} closed the connection", cid);
+                    }
+                    break;
+                }
+                Ok(_) => continue,
+                Err(err) => {
+                    warn!("Connection error from client {}: {}", cid, err);
+                    break;
+                }
+            };
+
             let client_msg = match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(msg) => msg,
                 Err(err) => {

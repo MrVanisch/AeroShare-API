@@ -177,9 +177,15 @@ async fn main() -> anyhow::Result<()> {
     let server_url = Arc::new(server_url);
     let auth_token = Arc::new(token);
 
+    let mut server_closed_connection = false;
     while let Some(msg) = read.next().await {
-        if let Ok(Message::Text(text)) = msg {
-            if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+        match msg {
+            Ok(Message::Text(text)) => {
+                let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) else {
+                    warn!("Received an invalid message from the server");
+                    continue;
+                };
+
                 match server_msg {
                     ServerMessage::Registered { client_id } => {
                         info!("Registered successfully. My ID: {}", client_id);
@@ -340,7 +346,28 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+            Ok(Message::Close(frame)) => {
+                server_closed_connection = true;
+                if let Some(frame) = frame {
+                    warn!(
+                        "Server closed the connection: {} ({})",
+                        frame.reason, frame.code
+                    );
+                } else {
+                    warn!("Server closed the connection");
+                }
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                error!("Lost connection to the server: {}", e);
+                break;
+            }
         }
+    }
+
+    if !server_closed_connection {
+        warn!("Disconnected from the server");
     }
 
     Ok(())
