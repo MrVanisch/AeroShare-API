@@ -17,3 +17,4 @@ futures-util = { workspace = true }
 rand = { workspace = true }
 tokio-stream = { workspace = true }
 http-body-util = { workspace = true }
+walkdir = "2.4"

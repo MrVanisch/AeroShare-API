@@ -12,10 +12,20 @@ pub struct SharedFolder {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ClientInfo {
+    pub client_id: String,
+    pub files_count: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
     /// Klient rejestruje folder z plikami po starcie
     Register { folder: SharedFolder },
+    /// Klient prosi o liste podlaczonych klientow
+    ListClients,
+    /// Klient prosi o liste plikow klienta albo serwera
+    ListFiles { target_client_id: String },
     /// Klient prosi o pobranie pliku od innego klienta
     RequestDownload {
         target_client_id: String,
@@ -28,6 +38,13 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     /// Potwierdzenie rejestracji z nadanym ID klienta
     Registered { client_id: String },
+    /// Lista podlaczonych klientow
+    ClientsList { clients: Vec<ClientInfo> },
+    /// Lista plikow klienta albo serwera
+    FileList {
+        target_client_id: String,
+        files: Vec<FileMetadata>,
+    },
     /// Polecenie dla klienta (źródła) aby wysłał plik strumieniem na wskazany endpoint
     UploadInstruction {
         file_path: String,

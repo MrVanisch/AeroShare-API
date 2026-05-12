@@ -23,7 +23,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
-use shared::{ClientMessage, ServerMessage, SharedFolder};
+use shared::{ClientInfo, ClientMessage, FileMetadata, ServerMessage, SharedFolder};
 
 type StreamChunk = Result<Bytes, std::io::Error>;
 
@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn read_server_commands(state: Arc<AppState>) {
-    println!("Komendy serwera: clients, download <client_id> <file_path>, help");
+    println!("Komendy serwera: clients, files <client_id|server>, download <client_id|server> <file_path>, help");
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
@@ -124,7 +124,7 @@ async fn read_server_commands(state: Arc<AppState>) {
         }
 
         if line.eq_ignore_ascii_case("help") {
-            println!("Komendy: clients, download <client_id> <file_path>");
+            println!("Komendy: clients, files <client_id|server>, download <client_id|server> <file_path>");
             continue;
         }
 
@@ -138,8 +138,19 @@ async fn read_server_commands(state: Arc<AppState>) {
         let target_client_id = parts.next().unwrap_or_default().trim();
         let file_path = parts.next().unwrap_or_default().trim();
 
-        if command != "download" || target_client_id.is_empty() || file_path.is_empty() {
-            println!("Nieznana komenda. Uzycie: download <client_id> <file_path>");
+        if command.eq_ignore_ascii_case("files")
+            && !target_client_id.is_empty()
+            && file_path.is_empty()
+        {
+            list_files_for_target(&state, target_client_id).await;
+            continue;
+        }
+
+        if !command.eq_ignore_ascii_case("download")
+            || target_client_id.is_empty()
+            || file_path.is_empty()
+        {
+            println!("Nieznana komenda. Uzycie: clients, files <client_id|server>, download <client_id|server> <file_path>");
             continue;
         }
 
@@ -176,6 +187,70 @@ async fn list_connected_clients(state: &Arc<AppState>) {
             println!("- {} (brak zarejestrowanej listy plikow)", client_id);
         }
     }
+}
+
+async fn list_files_for_target(state: &Arc<AppState>, target_client_id: &str) {
+    if target_client_id.eq_ignore_ascii_case("server") {
+        match collect_server_files(state) {
+            Ok(files) => print_files("server", &files),
+            Err(e) => println!("Blad listowania plikow serwera: {}", e),
+        }
+        return;
+    }
+
+    let clients = state.clients.read().await;
+    if !clients.contains_key(target_client_id) {
+        println!("Nie znaleziono klienta: {}", target_client_id);
+        return;
+    }
+    drop(clients);
+
+    let folders = state.folders.read().await;
+    let Some(folder) = folders.get(target_client_id) else {
+        println!(
+            "Klient {} nie zarejestrowal jeszcze listy plikow",
+            target_client_id
+        );
+        return;
+    };
+
+    print_files(target_client_id, &folder.files);
+}
+
+fn print_files(target_client_id: &str, files: &[FileMetadata]) {
+    if files.is_empty() {
+        println!("Brak plikow dla: {}", target_client_id);
+        return;
+    }
+
+    println!("Pliki {}:", target_client_id);
+    for file in files {
+        println!("- {} ({} B)", file.path, file.size);
+    }
+}
+
+fn collect_server_files(state: &AppState) -> anyhow::Result<Vec<FileMetadata>> {
+    let mut files = Vec::new();
+
+    for entry in walkdir::WalkDir::new(&state.server_shared_dir)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+    {
+        if entry.file_type().is_file() {
+            let metadata = entry.metadata()?;
+            let path = entry
+                .path()
+                .strip_prefix(&state.server_shared_dir)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push(FileMetadata {
+                path,
+                size: metadata.len(),
+            });
+        }
+    }
+
+    Ok(files)
 }
 
 async fn ws_handler(
@@ -256,6 +331,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         .await
                         .insert(cid.clone(), folder);
                 }
+                ClientMessage::ListClients => {
+                    send_clients_list(&state_clone, &tx).await;
+                }
+                ClientMessage::ListFiles { target_client_id } => {
+                    send_files_list(&state_clone, &tx, target_client_id).await;
+                }
                 ClientMessage::RequestDownload {
                     target_client_id,
                     file_path,
@@ -334,6 +415,84 @@ async fn request_download(
             })
             .await;
     }
+}
+
+async fn send_clients_list(state: &Arc<AppState>, requester_tx: &mpsc::Sender<ServerMessage>) {
+    let clients = state.clients.read().await;
+    let folders = state.folders.read().await;
+    let clients = clients
+        .keys()
+        .map(|client_id| ClientInfo {
+            client_id: client_id.clone(),
+            files_count: folders
+                .get(client_id)
+                .map(|folder| folder.files.len())
+                .unwrap_or_default(),
+        })
+        .collect();
+
+    let _ = requester_tx
+        .send(ServerMessage::ClientsList { clients })
+        .await;
+}
+
+async fn send_files_list(
+    state: &Arc<AppState>,
+    requester_tx: &mpsc::Sender<ServerMessage>,
+    target_client_id: String,
+) {
+    if target_client_id.eq_ignore_ascii_case("server") {
+        match collect_server_files(state) {
+            Ok(files) => {
+                let _ = requester_tx
+                    .send(ServerMessage::FileList {
+                        target_client_id: "server".into(),
+                        files,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                error!("Nie mozna wypisac plikow serwera: {}", e);
+                let _ = requester_tx
+                    .send(ServerMessage::Error {
+                        message: "Nie mozna wypisac plikow serwera".into(),
+                    })
+                    .await;
+            }
+        }
+        return;
+    }
+
+    let clients = state.clients.read().await;
+    if !clients.contains_key(&target_client_id) {
+        let _ = requester_tx
+            .send(ServerMessage::Error {
+                message: format!("Nie znaleziono klienta: {}", target_client_id),
+            })
+            .await;
+        return;
+    }
+    drop(clients);
+
+    let folders = state.folders.read().await;
+    let Some(folder) = folders.get(&target_client_id) else {
+        let _ = requester_tx
+            .send(ServerMessage::Error {
+                message: format!(
+                    "Klient {} nie zarejestrowal jeszcze listy plikow",
+                    target_client_id
+                ),
+            })
+            .await;
+        return;
+    };
+
+    let _ = requester_tx
+        .send(ServerMessage::FileList {
+            target_client_id,
+            files: folder.files.clone(),
+        })
+        .await;
 }
 
 async fn request_server_file_download(
@@ -424,6 +583,11 @@ async fn request_client_file_for_server(
     target_client_id: String,
     file_path: String,
 ) {
+    if target_client_id.eq_ignore_ascii_case("server") {
+        download_server_file_for_server(state, file_path).await;
+        return;
+    }
+
     let clients_read = state.clients.read().await;
     let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
         warn!("Nie znaleziono klienta: {}", target_client_id);
@@ -489,6 +653,49 @@ async fn request_client_file_for_server(
     match result {
         Ok(()) => info!("Serwer zapisal pobrany plik: {:?}", output_path),
         Err(e) => error!("Blad zapisu pobranego pliku na serwerze: {}", e),
+    }
+}
+
+async fn download_server_file_for_server(state: &Arc<AppState>, file_path: String) {
+    if !is_safe_relative_path(&file_path) {
+        warn!("Niedozwolona sciezka pliku serwera");
+        return;
+    }
+
+    let mut full_path = state.server_shared_dir.clone();
+    full_path.push(&file_path);
+
+    let shared_dir_canon = match fs::canonicalize(&state.server_shared_dir) {
+        Ok(path) => path,
+        Err(e) => {
+            error!("Nie mozna zweryfikowac folderu plikow serwera: {}", e);
+            return;
+        }
+    };
+
+    let full_path = match fs::canonicalize(&full_path) {
+        Ok(path) if path.starts_with(&shared_dir_canon) => path,
+        _ => {
+            warn!("Plik serwera nie istnieje albo jest poza folderem");
+            return;
+        }
+    };
+
+    let file_name = PathBuf::from(&file_path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    if file_name.is_empty() {
+        warn!("Nie mozna pobrac pliku bez nazwy");
+        return;
+    }
+
+    let output_path = state.server_download_dir.join(file_name);
+    match tokio::fs::copy(&full_path, &output_path).await {
+        Ok(_) => info!("Serwer skopiowal plik do {:?}", output_path),
+        Err(e) => error!("Blad kopiowania pliku serwera: {}", e),
     }
 }
 

@@ -66,7 +66,9 @@ async fn main() -> anyhow::Result<()> {
         .send(Message::Text(serde_json::to_string(&reg_msg)?))
         .await?;
 
-    info!("Komendy: download <client_id> <file_path>, help");
+    info!(
+        "Komendy: clients, files <client_id|server>, download <client_id|server> <file_path>, help"
+    );
 
     tokio::spawn(async move {
         let stdin = BufReader::new(tokio::io::stdin());
@@ -79,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if line.eq_ignore_ascii_case("help") {
-                info!("Uzycie: download <client_id> <file_path>");
+                info!("Komendy: clients, files <client_id|server>, download <client_id|server> <file_path>");
                 continue;
             }
 
@@ -88,8 +90,47 @@ async fn main() -> anyhow::Result<()> {
             let target_client_id = parts.next().unwrap_or_default().trim();
             let file_path = parts.next().unwrap_or_default().trim();
 
-            if command != "download" || target_client_id.is_empty() || file_path.is_empty() {
-                warn!("Nieznana komenda. Uzycie: download <client_id> <file_path>");
+            if command.eq_ignore_ascii_case("clients")
+                && target_client_id.is_empty()
+                && file_path.is_empty()
+            {
+                let msg = ClientMessage::ListClients;
+                match serde_json::to_string(&msg) {
+                    Ok(json) => {
+                        if write.send(Message::Text(json)).await.is_err() {
+                            error!("Nie mozna wyslac komendy listowania klientow do serwera");
+                            break;
+                        }
+                    }
+                    Err(e) => error!("Nie mozna przygotowac komendy listowania klientow: {}", e),
+                }
+                continue;
+            }
+
+            if command.eq_ignore_ascii_case("files")
+                && !target_client_id.is_empty()
+                && file_path.is_empty()
+            {
+                let msg = ClientMessage::ListFiles {
+                    target_client_id: target_client_id.to_string(),
+                };
+                match serde_json::to_string(&msg) {
+                    Ok(json) => {
+                        if write.send(Message::Text(json)).await.is_err() {
+                            error!("Nie mozna wyslac komendy listowania plikow do serwera");
+                            break;
+                        }
+                    }
+                    Err(e) => error!("Nie mozna przygotowac komendy listowania plikow: {}", e),
+                }
+                continue;
+            }
+
+            if !command.eq_ignore_ascii_case("download")
+                || target_client_id.is_empty()
+                || file_path.is_empty()
+            {
+                warn!("Nieznana komenda. Uzycie: clients, files <client_id|server>, download <client_id|server> <file_path>");
                 continue;
             }
 
@@ -121,6 +162,29 @@ async fn main() -> anyhow::Result<()> {
                 match server_msg {
                     ServerMessage::Registered { client_id } => {
                         info!("Zarejestrowano poprawnie. Moje ID: {}", client_id);
+                    }
+                    ServerMessage::ClientsList { clients } => {
+                        if clients.is_empty() {
+                            info!("Brak polaczonych klientow");
+                        } else {
+                            info!("Polaczeni klienci:");
+                            for client in clients {
+                                info!("- {} ({} plikow)", client.client_id, client.files_count);
+                            }
+                        }
+                    }
+                    ServerMessage::FileList {
+                        target_client_id,
+                        files,
+                    } => {
+                        if files.is_empty() {
+                            info!("Brak plikow dla: {}", target_client_id);
+                        } else {
+                            info!("Pliki {}:", target_client_id);
+                            for file in files {
+                                info!("- {} ({} B)", file.path, file.size);
+                            }
+                        }
                     }
                     ServerMessage::UploadInstruction {
                         file_path,
