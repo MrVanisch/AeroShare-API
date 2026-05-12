@@ -8,7 +8,10 @@ use std::{
 };
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, http::HeaderValue, protocol::Message},
+};
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -51,10 +54,16 @@ async fn main() -> anyhow::Result<()> {
     info!("Indexed {} files", files.len());
 
     let server_url = env::var("SERVER_URL").unwrap_or_else(|_| "127.0.0.1:5000".to_string());
-    let ws_url = format!("ws://{}/ws?token={}", server_url, token);
+    let ws_url = format!("ws://{}/ws", server_url);
     info!("Connecting to WS server: {}", server_url);
 
-    let (ws_stream, _) = connect_async(&ws_url).await?;
+    let mut ws_request = ws_url.into_client_request()?;
+    ws_request.headers_mut().insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {}", token))?,
+    );
+
+    let (ws_stream, _) = connect_async(ws_request).await?;
     info!("Connected to WS server");
 
     let (mut write, mut read) = ws_stream.split();
@@ -216,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
                     ServerMessage::UploadInstruction {
                         file_path,
                         stream_id,
+                        stream_token,
                     } => {
                         info!("Server requested file upload: {}", file_path);
 
@@ -261,6 +271,7 @@ async fn main() -> anyhow::Result<()> {
                                     let res = http_client_clone
                                         .post(&upload_url)
                                         .bearer_auth(auth_token_clone.as_str())
+                                        .header("x-stream-token", stream_token.as_str())
                                         .body(reqwest::Body::wrap_stream(reader_stream))
                                         .send()
                                         .await;
@@ -284,6 +295,7 @@ async fn main() -> anyhow::Result<()> {
                     ServerMessage::DownloadReady {
                         stream_id,
                         file_name,
+                        stream_token,
                     } => {
                         info!("Downloading file: {}", file_name);
                         let http_client_clone = http_client.clone();
@@ -296,6 +308,7 @@ async fn main() -> anyhow::Result<()> {
                             match http_client_clone
                                 .get(&download_url)
                                 .bearer_auth(auth_token_clone.as_str())
+                                .header("x-stream-token", stream_token.as_str())
                                 .send()
                                 .await
                             {

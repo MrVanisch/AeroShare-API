@@ -12,9 +12,11 @@ AeroShare API is a Rust file-sharing application that uses a relay server. The p
 
 The current version requires an authorization token for:
 
-- WebSocket connections: `/ws?token=...`
+- WebSocket connections: `Authorization: Bearer <token>`
 - stream uploads: `Authorization: Bearer <token>`
 - stream downloads: `Authorization: Bearer <token>`
+
+Each file stream also requires a short-lived per-stream `x-stream-token`, so knowing the server token alone is not enough to upload into or download from an existing stream.
 
 The server does not print the token in logs. `server_token.txt`, `client_token.txt`, `.env`, `shared_files/`, and `target/` are ignored by git.
 
@@ -24,7 +26,15 @@ The client also validates file paths before reading files:
 - `..` path traversal is rejected,
 - `canonicalize` is used to block reads outside the configured shared directory.
 
-For use outside a local network, put the server behind a TLS reverse proxy and use `wss://`/`https://`. The WebSocket token is currently passed in the URL query string, so proxy URL logging should be restricted in public deployments.
+The server validates client registrations before accepting them:
+
+- registered file paths must be safe relative paths,
+- duplicate registered paths are rejected,
+- registration size and path length are bounded,
+- requested downloads must exist in the target client's registered file list,
+- uploads are capped by `MAX_STREAM_BYTES`.
+
+For use outside a local network, put the server behind a TLS reverse proxy and use `wss://`/`https://`.
 
 The server can also expose files from `SERVER_SHARED_DIR` as the special download target `server`.
 
@@ -205,6 +215,8 @@ The `clients` command also includes the special `server` target and its file cou
 - `SERVER_SHARED_DIR` - server-side shared directory, defaults to `./server_files`.
 - `SERVER_URL` - server address used by the client, defaults to `127.0.0.1:5000`.
 - `SHARED_DIR` - client directory to share, defaults to `./shared_files`.
+- `MAX_STREAM_BYTES` - maximum allowed stream size, defaults to `1073741824` bytes.
+- `STREAM_TTL_SECS` - maximum lifetime of an uncompleted stream, defaults to `600` seconds.
 - `RUST_LOG` - log level, for example `debug`.
 
 Example:

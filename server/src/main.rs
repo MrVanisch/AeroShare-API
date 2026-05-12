@@ -2,7 +2,7 @@ use axum::{
     body::{Body, Bytes},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        Path, State,
     },
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -12,12 +12,12 @@ use axum::{
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use http_body_util::BodyExt;
 use rand::{distributions::Alphanumeric, Rng};
-use serde::Deserialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     path::{Component, Path as StdPath, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, RwLock};
@@ -27,9 +27,19 @@ use shared::{ClientInfo, ClientMessage, FileMetadata, ServerMessage, SharedFolde
 
 type StreamChunk = Result<Bytes, std::io::Error>;
 
+const STREAM_TOKEN_HEADER: &str = "x-stream-token";
+const DEFAULT_MAX_REGISTERED_FILES: usize = 10_000;
+const DEFAULT_MAX_FILE_PATH_BYTES: usize = 1024;
+const DEFAULT_MAX_STREAM_BYTES: u64 = 1024 * 1024 * 1024;
+const DEFAULT_STREAM_TTL_SECS: u64 = 600;
+const TOKEN_LEN: usize = 48;
+
 struct StreamEntry {
     sender: Option<mpsc::Sender<StreamChunk>>,
     receiver: Option<mpsc::Receiver<StreamChunk>>,
+    upload_token: String,
+    download_token: String,
+    expected_size: Option<u64>,
 }
 
 struct AppState {
@@ -39,11 +49,42 @@ struct AppState {
     streams: RwLock<HashMap<String, StreamEntry>>,
     server_shared_dir: PathBuf,
     server_download_dir: PathBuf,
+    max_stream_bytes: u64,
+    stream_ttl: Duration,
 }
 
-#[derive(Deserialize)]
-struct AuthQuery {
-    token: String,
+fn generate_secret(len: usize) -> String {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(len)
+        .map(char::from)
+        .collect()
+}
+
+fn write_secret_file(path: &str, secret: &str) -> anyhow::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+
+    use std::io::Write;
+    let mut file = options.open(path)?;
+    file.write_all(secret.as_bytes())?;
+    file.flush()?;
+    Ok(())
+}
+
+fn read_u64_env(name: &str, default_value: u64) -> anyhow::Result<u64> {
+    match env::var(name) {
+        Ok(value) => value
+            .parse::<u64>()
+            .map_err(|e| anyhow::anyhow!("Invalid {} value: {}", name, e)),
+        Err(_) => Ok(default_value),
+    }
 }
 
 #[tokio::main]
@@ -60,12 +101,8 @@ async fn main() -> anyhow::Result<()> {
     } else if let Ok(existing_token) = fs::read_to_string(token_path) {
         existing_token.trim().to_string()
     } else {
-        let new_token: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(48)
-            .map(char::from)
-            .collect();
-        fs::write(token_path, &new_token)?;
+        let new_token = generate_secret(TOKEN_LEN);
+        write_secret_file(token_path, &new_token)?;
         info!(
             "Generated a new authentication token and wrote it to {}",
             token_path
@@ -74,6 +111,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     info!("Server started with token authentication enabled");
+    let max_stream_bytes = read_u64_env("MAX_STREAM_BYTES", DEFAULT_MAX_STREAM_BYTES)?;
+    let stream_ttl = Duration::from_secs(read_u64_env("STREAM_TTL_SECS", DEFAULT_STREAM_TTL_SECS)?);
+    info!("Maximum stream size: {} bytes", max_stream_bytes);
+    info!("Stream lifetime: {} seconds", stream_ttl.as_secs());
+
     let server_shared_dir =
         PathBuf::from(env::var("SERVER_SHARED_DIR").unwrap_or_else(|_| "./server_files".into()));
     fs::create_dir_all(&server_shared_dir)?;
@@ -93,6 +135,8 @@ async fn main() -> anyhow::Result<()> {
         streams: RwLock::new(HashMap::new()),
         server_shared_dir,
         server_download_dir,
+        max_stream_bytes,
+        stream_ttl,
     });
 
     tokio::spawn(read_server_commands(state.clone()));
@@ -277,12 +321,65 @@ fn collect_server_files(state: &AppState) -> anyhow::Result<Vec<FileMetadata>> {
     Ok(files)
 }
 
+fn validate_shared_folder(
+    folder: SharedFolder,
+    max_stream_bytes: u64,
+) -> Result<SharedFolder, String> {
+    if folder.files.len() > DEFAULT_MAX_REGISTERED_FILES {
+        return Err(format!(
+            "Too many registered files; limit is {}",
+            DEFAULT_MAX_REGISTERED_FILES
+        ));
+    }
+
+    let mut seen_paths = HashSet::new();
+    let mut files = Vec::with_capacity(folder.files.len());
+
+    for mut file in folder.files {
+        file.path = file.path.replace('\\', "/");
+
+        if file.path.len() > DEFAULT_MAX_FILE_PATH_BYTES {
+            return Err(format!(
+                "File path is too long; limit is {} bytes",
+                DEFAULT_MAX_FILE_PATH_BYTES
+            ));
+        }
+
+        if !is_safe_relative_path(&file.path) {
+            return Err(format!("Invalid registered file path: {}", file.path));
+        }
+
+        if file.size > max_stream_bytes {
+            return Err(format!(
+                "Registered file exceeds the stream limit: {}",
+                file.path
+            ));
+        }
+
+        if !seen_paths.insert(file.path.clone()) {
+            return Err(format!("Duplicate registered file path: {}", file.path));
+        }
+
+        files.push(file);
+    }
+
+    Ok(SharedFolder { files })
+}
+
+fn find_registered_file(folder: &SharedFolder, file_path: &str) -> Option<FileMetadata> {
+    folder
+        .files
+        .iter()
+        .find(|file| file.path == file_path)
+        .cloned()
+}
+
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    Query(query): Query<AuthQuery>,
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> Response {
-    if query.token != state.auth_token {
+    if !is_authorized(&headers, &state) {
         warn!("Rejected WS connection because of an invalid token");
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -364,6 +461,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
             match client_msg {
                 ClientMessage::Register { folder } => {
+                    let folder = match validate_shared_folder(folder, state_clone.max_stream_bytes)
+                    {
+                        Ok(folder) => folder,
+                        Err(message) => {
+                            warn!(
+                                "Rejected invalid file registration from {}: {}",
+                                cid, message
+                            );
+                            let _ = tx.send(ServerMessage::Error { message }).await;
+                            continue;
+                        }
+                    };
+
                     info!(
                         "Client {} shared a folder with {} files",
                         cid,
@@ -412,26 +522,59 @@ async fn request_download(
         return;
     }
 
-    let clients_read = state.clients.read().await;
-    let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
+    let file_path = file_path.replace('\\', "/");
+    if !is_safe_relative_path(&file_path) {
         let _ = requester_tx
             .send(ServerMessage::Error {
-                message: "Target is unavailable".into(),
+                message: "Invalid target file path".into(),
             })
             .await;
         return;
+    }
+
+    let (target_tx, file_metadata) = {
+        let clients_read = state.clients.read().await;
+        let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
+            let _ = requester_tx
+                .send(ServerMessage::Error {
+                    message: "Target is unavailable".into(),
+                })
+                .await;
+            return;
+        };
+
+        let folders = state.folders.read().await;
+        let Some(folder) = folders.get(&target_client_id) else {
+            let _ = requester_tx
+                .send(ServerMessage::Error {
+                    message: "Target has not registered a file list yet".into(),
+                })
+                .await;
+            return;
+        };
+        let Some(file_metadata) = find_registered_file(folder, &file_path) else {
+            let _ = requester_tx
+                .send(ServerMessage::Error {
+                    message: "File is not registered by target".into(),
+                })
+                .await;
+            return;
+        };
+
+        (target_tx, file_metadata)
     };
-    drop(clients_read);
 
     let stream_id = uuid::Uuid::new_v4().to_string();
-    let (stream_tx, stream_rx) = mpsc::channel(1024);
-    state.streams.write().await.insert(
+    let upload_token = generate_secret(TOKEN_LEN);
+    let download_token = generate_secret(TOKEN_LEN);
+    let _stream_tx = create_stream(
+        state,
         stream_id.clone(),
-        StreamEntry {
-            sender: Some(stream_tx),
-            receiver: Some(stream_rx),
-        },
-    );
+        Some(file_metadata.size),
+        upload_token.clone(),
+        download_token.clone(),
+    )
+    .await;
 
     let file_name = std::path::PathBuf::from(&file_path)
         .file_name()
@@ -443,12 +586,14 @@ async fn request_download(
         .send(ServerMessage::DownloadReady {
             stream_id: stream_id.clone(),
             file_name,
+            stream_token: download_token,
         })
         .await;
 
     let upload_req = ServerMessage::UploadInstruction {
         file_path,
         stream_id: stream_id.clone(),
+        stream_token: upload_token,
     };
 
     if target_tx.send(upload_req).await.is_err() {
@@ -459,6 +604,42 @@ async fn request_download(
             })
             .await;
     }
+}
+
+async fn create_stream(
+    state: &Arc<AppState>,
+    stream_id: String,
+    expected_size: Option<u64>,
+    upload_token: String,
+    download_token: String,
+) -> mpsc::Sender<StreamChunk> {
+    let (stream_tx, stream_rx) = mpsc::channel(1024);
+    state.streams.write().await.insert(
+        stream_id.clone(),
+        StreamEntry {
+            sender: Some(stream_tx.clone()),
+            receiver: Some(stream_rx),
+            upload_token,
+            download_token,
+            expected_size,
+        },
+    );
+
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(state_clone.stream_ttl).await;
+        if state_clone
+            .streams
+            .write()
+            .await
+            .remove(&stream_id)
+            .is_some()
+        {
+            warn!("Expired stream removed: {}", stream_id);
+        }
+    });
+
+    stream_tx
 }
 
 async fn send_clients_list(state: &Arc<AppState>, requester_tx: &mpsc::Sender<ServerMessage>) {
@@ -593,15 +774,41 @@ async fn request_server_file_download(
         return;
     }
 
+    let file_size = match fs::metadata(&full_path) {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        _ => {
+            let _ = requester_tx
+                .send(ServerMessage::Error {
+                    message: "Server file does not exist".into(),
+                })
+                .await;
+            return;
+        }
+    };
+
+    if file_size > state.max_stream_bytes {
+        let _ = requester_tx
+            .send(ServerMessage::Error {
+                message: format!(
+                    "Server file is larger than the configured stream limit ({} bytes)",
+                    state.max_stream_bytes
+                ),
+            })
+            .await;
+        return;
+    }
+
     let stream_id = uuid::Uuid::new_v4().to_string();
-    let (stream_tx, stream_rx) = mpsc::channel(1024);
-    state.streams.write().await.insert(
+    let upload_token = generate_secret(TOKEN_LEN);
+    let download_token = generate_secret(TOKEN_LEN);
+    let stream_tx = create_stream(
+        state,
         stream_id.clone(),
-        StreamEntry {
-            sender: Some(stream_tx.clone()),
-            receiver: Some(stream_rx),
-        },
-    );
+        Some(file_size),
+        upload_token,
+        download_token.clone(),
+    )
+    .await;
 
     let file_name = PathBuf::from(&file_path)
         .file_name()
@@ -613,6 +820,7 @@ async fn request_server_file_download(
         .send(ServerMessage::DownloadReady {
             stream_id: stream_id.clone(),
             file_name,
+            stream_token: download_token,
         })
         .await;
 
@@ -642,12 +850,37 @@ async fn request_client_file_for_server(
         return;
     }
 
-    let clients_read = state.clients.read().await;
-    let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
-        warn!("Client not found: {}", target_client_id);
+    let file_path = file_path.replace('\\', "/");
+    if !is_safe_relative_path(&file_path) {
+        warn!("Invalid target file path");
         return;
     };
-    drop(clients_read);
+
+    let (target_tx, file_metadata) = {
+        let clients_read = state.clients.read().await;
+        let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
+            warn!("Client not found: {}", target_client_id);
+            return;
+        };
+
+        let folders = state.folders.read().await;
+        let Some(folder) = folders.get(&target_client_id) else {
+            warn!(
+                "Client {} has not registered a file list yet",
+                target_client_id
+            );
+            return;
+        };
+        let Some(file_metadata) = find_registered_file(folder, &file_path) else {
+            warn!(
+                "Client {} has not registered requested file: {}",
+                target_client_id, file_path
+            );
+            return;
+        };
+
+        (target_tx, file_metadata)
+    };
 
     let file_name = PathBuf::from(&file_path)
         .file_name()
@@ -661,18 +894,21 @@ async fn request_client_file_for_server(
     }
 
     let stream_id = uuid::Uuid::new_v4().to_string();
-    let (stream_tx, stream_rx) = mpsc::channel(1024);
-    state.streams.write().await.insert(
+    let upload_token = generate_secret(TOKEN_LEN);
+    let download_token = generate_secret(TOKEN_LEN);
+    let _stream_tx = create_stream(
+        state,
         stream_id.clone(),
-        StreamEntry {
-            sender: Some(stream_tx),
-            receiver: Some(stream_rx),
-        },
-    );
+        Some(file_metadata.size),
+        upload_token.clone(),
+        download_token,
+    )
+    .await;
 
     let upload_req = ServerMessage::UploadInstruction {
         file_path,
         stream_id: stream_id.clone(),
+        stream_token: upload_token,
     };
 
     if target_tx.send(upload_req).await.is_err() {
@@ -799,11 +1035,33 @@ async fn cleanup_client(state: &Arc<AppState>, client_id: &str) {
 }
 
 fn is_authorized(headers: &HeaderMap, state: &AppState) -> bool {
-    let expected = format!("Bearer {}", state.auth_token);
     headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value == expected)
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| secure_eq(token, &state.auth_token))
+}
+
+fn is_stream_token_authorized(headers: &HeaderMap, expected_token: &str) -> bool {
+    headers
+        .get(STREAM_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|token| secure_eq(token, expected_token))
+}
+
+fn secure_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    let mut diff = a.len() ^ b.len();
+    let max_len = a.len().max(b.len());
+
+    for index in 0..max_len {
+        let left = a.get(index).copied().unwrap_or_default();
+        let right = b.get(index).copied().unwrap_or_default();
+        diff |= usize::from(left ^ right);
+    }
+
+    diff == 0
 }
 
 fn is_safe_relative_path(file_path: &str) -> bool {
@@ -824,23 +1082,51 @@ async fn handle_upload(
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    let sender = {
+    let (sender, expected_size) = {
         let streams = state.streams.read().await;
-        streams
-            .get(&stream_id)
-            .and_then(|entry| entry.sender.clone())
+        let Some(entry) = streams.get(&stream_id) else {
+            warn!("Invalid stream_id during upload: {}", stream_id);
+            return StatusCode::NOT_FOUND.into_response();
+        };
+
+        if !is_stream_token_authorized(&headers, &entry.upload_token) {
+            warn!(
+                "Rejected stream upload with invalid stream token: {}",
+                stream_id
+            );
+            return StatusCode::FORBIDDEN.into_response();
+        }
+
+        (entry.sender.clone(), entry.expected_size)
     };
 
     let Some(sender) = sender else {
-        warn!("Invalid stream_id during upload: {}", stream_id);
-        return StatusCode::NOT_FOUND.into_response();
+        warn!("Stream upload sender is no longer available: {}", stream_id);
+        return StatusCode::CONFLICT.into_response();
     };
 
     info!("Started receiving stream: {}", stream_id);
+    let max_bytes = expected_size
+        .unwrap_or(state.max_stream_bytes)
+        .min(state.max_stream_bytes);
+    let mut bytes_received = 0_u64;
+
     while let Some(chunk_res) = body.frame().await {
         match chunk_res {
             Ok(frame) => {
                 if let Ok(bytes) = frame.into_data() {
+                    let chunk_len = bytes.len() as u64;
+                    if bytes_received.saturating_add(chunk_len) > max_bytes {
+                        warn!(
+                            "Rejected oversized upload for stream {} after {} bytes",
+                            stream_id,
+                            bytes_received.saturating_add(chunk_len)
+                        );
+                        state.streams.write().await.remove(&stream_id);
+                        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+                    }
+                    bytes_received += chunk_len;
+
                     if sender.send(Ok(bytes)).await.is_err() {
                         warn!("Downloading client disconnected");
                         break;
@@ -883,6 +1169,14 @@ async fn handle_download(
             return (StatusCode::NOT_FOUND, "Stream not found").into_response();
         };
 
+        if !is_stream_token_authorized(&headers, &entry.download_token) {
+            warn!(
+                "Rejected stream download with invalid stream token: {}",
+                stream_id
+            );
+            return StatusCode::FORBIDDEN.into_response();
+        }
+
         let receiver = entry.receiver.take();
         if entry.sender.is_none() {
             streams.remove(&stream_id);
@@ -896,4 +1190,64 @@ async fn handle_download(
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     (StatusCode::OK, Body::from_stream(stream)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_relative_path_rejects_traversal_and_absolute_paths() {
+        assert!(is_safe_relative_path("folder/file.txt"));
+        assert!(is_safe_relative_path("file.txt"));
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("../file.txt"));
+        assert!(!is_safe_relative_path("folder/../file.txt"));
+        assert!(!is_safe_relative_path("/tmp/file.txt"));
+        #[cfg(windows)]
+        assert!(!is_safe_relative_path("C:\\tmp\\file.txt"));
+    }
+
+    #[test]
+    fn secure_eq_matches_only_equal_strings() {
+        assert!(secure_eq("same-token", "same-token"));
+        assert!(!secure_eq("same-token", "other-token"));
+        assert!(!secure_eq("same-token", "same-token-extra"));
+    }
+
+    #[test]
+    fn registration_validation_rejects_unsafe_or_duplicate_paths() {
+        let invalid = SharedFolder {
+            files: vec![FileMetadata {
+                path: "../secret.txt".into(),
+                size: 1,
+            }],
+        };
+        assert!(validate_shared_folder(invalid, 1024).is_err());
+
+        let duplicate = SharedFolder {
+            files: vec![
+                FileMetadata {
+                    path: "file.txt".into(),
+                    size: 1,
+                },
+                FileMetadata {
+                    path: "file.txt".into(),
+                    size: 1,
+                },
+            ],
+        };
+        assert!(validate_shared_folder(duplicate, 1024).is_err());
+    }
+
+    #[test]
+    fn registration_validation_rejects_files_over_stream_limit() {
+        let folder = SharedFolder {
+            files: vec![FileMetadata {
+                path: "large.bin".into(),
+                size: 2048,
+            }],
+        };
+        assert!(validate_shared_folder(folder, 1024).is_err());
+    }
 }

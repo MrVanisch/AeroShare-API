@@ -49,11 +49,13 @@ pub enum ServerMessage {
     UploadInstruction {
         file_path: String,
         stream_id: String,
+        stream_token: String,
     },
     /// Information for the downloading client about where to fetch the file
     DownloadReady {
         stream_id: String,
         file_name: String,
+        stream_token: String,
     },
     /// Error
     Error { message: String },
