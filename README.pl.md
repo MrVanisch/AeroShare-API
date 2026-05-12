@@ -159,6 +159,18 @@ download 8f3c2f6a-0f6d-4c57-9c6e-cf7f9d6f4b1a test.txt
 
 Klient pobierajacy zapisze plik w `./downloads`.
 
+Aby wypisac pliki udostepniane przez serwer z konsoli klienta:
+
+```text
+server-files
+```
+
+Mozesz tez uzyc:
+
+```text
+files server
+```
+
 Aby pobrac plik z folderu serwera, wpisz:
 
 ```text

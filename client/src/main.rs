@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     info!(
-        "Komendy: clients, files <client_id|server>, download <client_id|server> <file_path>, help"
+        "Komendy: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help"
     );
 
     tokio::spawn(async move {
@@ -81,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if line.eq_ignore_ascii_case("help") {
-                info!("Komendy: clients, files <client_id|server>, download <client_id|server> <file_path>");
+                info!("Komendy: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
                 continue;
             }
 
@@ -103,6 +103,30 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     Err(e) => error!("Nie mozna przygotowac komendy listowania klientow: {}", e),
+                }
+                continue;
+            }
+
+            if command.eq_ignore_ascii_case("server-files")
+                && target_client_id.is_empty()
+                && file_path.is_empty()
+            {
+                let msg = ClientMessage::ListFiles {
+                    target_client_id: "server".to_string(),
+                };
+                match serde_json::to_string(&msg) {
+                    Ok(json) => {
+                        if write.send(Message::Text(json)).await.is_err() {
+                            error!("Nie mozna wyslac komendy listowania plikow serwera");
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Nie mozna przygotowac komendy listowania plikow serwera: {}",
+                            e
+                        )
+                    }
                 }
                 continue;
             }
@@ -130,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
                 || target_client_id.is_empty()
                 || file_path.is_empty()
             {
-                warn!("Nieznana komenda. Uzycie: clients, files <client_id|server>, download <client_id|server> <file_path>");
+                warn!("Nieznana komenda. Uzycie: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
                 continue;
             }
 

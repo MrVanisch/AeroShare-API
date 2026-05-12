@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn read_server_commands(state: Arc<AppState>) {
-    println!("Komendy serwera: clients, files <client_id|server>, download <client_id|server> <file_path>, help");
+    println!("Komendy serwera: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help");
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
@@ -124,12 +124,17 @@ async fn read_server_commands(state: Arc<AppState>) {
         }
 
         if line.eq_ignore_ascii_case("help") {
-            println!("Komendy: clients, files <client_id|server>, download <client_id|server> <file_path>");
+            println!("Komendy: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
             continue;
         }
 
         if line.eq_ignore_ascii_case("clients") {
             list_connected_clients(&state).await;
+            continue;
+        }
+
+        if line.eq_ignore_ascii_case("server-files") {
+            list_files_for_target(&state, "server").await;
             continue;
         }
 
@@ -150,7 +155,7 @@ async fn read_server_commands(state: Arc<AppState>) {
             || target_client_id.is_empty()
             || file_path.is_empty()
         {
-            println!("Nieznana komenda. Uzycie: clients, files <client_id|server>, download <client_id|server> <file_path>");
+            println!("Nieznana komenda. Uzycie: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
             continue;
         }
 
