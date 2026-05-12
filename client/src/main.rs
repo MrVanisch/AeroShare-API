@@ -17,18 +17,18 @@ async fn main() -> anyhow::Result<()> {
 
     let token = env::var("SERVER_TOKEN").unwrap_or_else(|_| {
         fs::read_to_string("client_token.txt")
-            .expect("Brak SERVER_TOKEN i nie mozna odczytac client_token.txt")
+            .expect("SERVER_TOKEN is missing and client_token.txt could not be read")
             .trim()
             .to_string()
     });
 
     if token.is_empty() {
-        anyhow::bail!("Token nie moze byc pusty");
+        anyhow::bail!("Token cannot be empty");
     }
 
     let shared_dir = env::var("SHARED_DIR").unwrap_or_else(|_| "./shared_files".to_string());
     fs::create_dir_all(&shared_dir)?;
-    info!("Folder udostepniony klienta: {}", shared_dir);
+    info!("Client shared folder: {}", shared_dir);
 
     let mut files = Vec::new();
     for entry in walkdir::WalkDir::new(&shared_dir)
@@ -48,14 +48,14 @@ async fn main() -> anyhow::Result<()> {
             });
         }
     }
-    info!("Zaindeksowano {} plikow", files.len());
+    info!("Indexed {} files", files.len());
 
     let server_url = env::var("SERVER_URL").unwrap_or_else(|_| "127.0.0.1:5000".to_string());
     let ws_url = format!("ws://{}/ws?token={}", server_url, token);
-    info!("Laczenie do serwera WS: {}", server_url);
+    info!("Connecting to WS server: {}", server_url);
 
     let (ws_stream, _) = connect_async(&ws_url).await?;
-    info!("Polaczono z serwerem WS");
+    info!("Connected to WS server");
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     info!(
-        "Komendy: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help"
+        "Commands: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help"
     );
 
     tokio::spawn(async move {
@@ -81,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
             }
 
             if line.eq_ignore_ascii_case("help") {
-                info!("Komendy: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
+                info!("Commands: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help");
                 continue;
             }
 
@@ -98,11 +98,11 @@ async fn main() -> anyhow::Result<()> {
                 match serde_json::to_string(&msg) {
                     Ok(json) => {
                         if write.send(Message::Text(json)).await.is_err() {
-                            error!("Nie mozna wyslac komendy listowania klientow do serwera");
+                            error!("Could not send the client list command to the server");
                             break;
                         }
                     }
-                    Err(e) => error!("Nie mozna przygotowac komendy listowania klientow: {}", e),
+                    Err(e) => error!("Could not prepare the client list command: {}", e),
                 }
                 continue;
             }
@@ -117,15 +117,12 @@ async fn main() -> anyhow::Result<()> {
                 match serde_json::to_string(&msg) {
                     Ok(json) => {
                         if write.send(Message::Text(json)).await.is_err() {
-                            error!("Nie mozna wyslac komendy listowania plikow serwera");
+                            error!("Could not send the server file list command");
                             break;
                         }
                     }
                     Err(e) => {
-                        error!(
-                            "Nie mozna przygotowac komendy listowania plikow serwera: {}",
-                            e
-                        )
+                        error!("Could not prepare the server file list command: {}", e)
                     }
                 }
                 continue;
@@ -141,11 +138,11 @@ async fn main() -> anyhow::Result<()> {
                 match serde_json::to_string(&msg) {
                     Ok(json) => {
                         if write.send(Message::Text(json)).await.is_err() {
-                            error!("Nie mozna wyslac komendy listowania plikow do serwera");
+                            error!("Could not send the file list command to the server");
                             break;
                         }
                     }
-                    Err(e) => error!("Nie mozna przygotowac komendy listowania plikow: {}", e),
+                    Err(e) => error!("Could not prepare the file list command: {}", e),
                 }
                 continue;
             }
@@ -154,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
                 || target_client_id.is_empty()
                 || file_path.is_empty()
             {
-                warn!("Nieznana komenda. Uzycie: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
+                warn!("Unknown command. Usage: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
                 continue;
             }
 
@@ -166,11 +163,11 @@ async fn main() -> anyhow::Result<()> {
             match serde_json::to_string(&msg) {
                 Ok(json) => {
                     if write.send(Message::Text(json)).await.is_err() {
-                        error!("Nie mozna wyslac komendy pobierania do serwera");
+                        error!("Could not send the download command to the server");
                         break;
                     }
                 }
-                Err(e) => error!("Nie mozna przygotowac komendy pobierania: {}", e),
+                Err(e) => error!("Could not prepare the download command: {}", e),
             }
         }
     });
@@ -185,15 +182,15 @@ async fn main() -> anyhow::Result<()> {
             if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
                 match server_msg {
                     ServerMessage::Registered { client_id } => {
-                        info!("Zarejestrowano poprawnie. Moje ID: {}", client_id);
+                        info!("Registered successfully. My ID: {}", client_id);
                     }
                     ServerMessage::ClientsList { clients } => {
                         if clients.is_empty() {
-                            info!("Brak polaczonych klientow");
+                            info!("No connected clients");
                         } else {
-                            info!("Polaczeni klienci:");
+                            info!("Connected clients:");
                             for client in clients {
-                                info!("- {} ({} plikow)", client.client_id, client.files_count);
+                                info!("- {} ({} files)", client.client_id, client.files_count);
                             }
                         }
                     }
@@ -202,9 +199,9 @@ async fn main() -> anyhow::Result<()> {
                         files,
                     } => {
                         if files.is_empty() {
-                            info!("Brak plikow dla: {}", target_client_id);
+                            info!("No files for: {}", target_client_id);
                         } else {
-                            info!("Pliki {}:", target_client_id);
+                            info!("Files for {}:", target_client_id);
                             for file in files {
                                 info!("- {} ({} B)", file.path, file.size);
                             }
@@ -214,10 +211,10 @@ async fn main() -> anyhow::Result<()> {
                         file_path,
                         stream_id,
                     } => {
-                        info!("Serwer zada wyslania pliku: {}", file_path);
+                        info!("Server requested file upload: {}", file_path);
 
                         if !is_safe_relative_path(&file_path) {
-                            warn!("Niedozwolona struktura sciezki pliku: {}", file_path);
+                            warn!("Invalid file path structure: {}", file_path);
                             continue;
                         }
 
@@ -227,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
                         let shared_dir_canon = match std::fs::canonicalize(shared_dir.as_str()) {
                             Ok(path) => path,
                             Err(e) => {
-                                error!("Nie mozna zweryfikowac folderu udostepniania: {}", e);
+                                error!("Could not verify the shared folder: {}", e);
                                 continue;
                             }
                         };
@@ -237,7 +234,7 @@ async fn main() -> anyhow::Result<()> {
                         };
 
                         if !is_safe {
-                            warn!("Zablokowano probe odczytu spoza folderu udostepniania");
+                            warn!("Blocked an attempt to read outside the shared folder");
                             continue;
                         }
 
@@ -253,7 +250,7 @@ async fn main() -> anyhow::Result<()> {
                                     );
                                     let upload_url =
                                         format!("http://{}/stream/{}", server_url_clone, stream_id);
-                                    info!("Strumieniowanie pliku do serwera relay");
+                                    info!("Streaming file to relay server");
 
                                     let res = http_client_clone
                                         .post(&upload_url)
@@ -264,16 +261,16 @@ async fn main() -> anyhow::Result<()> {
 
                                     match res {
                                         Ok(r) if r.status().is_success() => {
-                                            info!("Wysylanie pliku zakonczone sukcesem")
+                                            info!("File upload completed successfully")
                                         }
                                         Ok(r) => {
-                                            error!("Blad HTTP podczas wysylania: {}", r.status())
+                                            error!("HTTP error during upload: {}", r.status())
                                         }
-                                        Err(e) => error!("Blad sieci: {}", e),
+                                        Err(e) => error!("Network error: {}", e),
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Nie mozna otworzyc pliku do wyslania: {}", e);
+                                    error!("Could not open file for upload: {}", e);
                                 }
                             }
                         });
@@ -282,7 +279,7 @@ async fn main() -> anyhow::Result<()> {
                         stream_id,
                         file_name,
                     } => {
-                        info!("Pobieranie pliku: {}", file_name);
+                        info!("Downloading file: {}", file_name);
                         let http_client_clone = http_client.clone();
                         let server_url_clone = server_url.clone();
                         let auth_token_clone = auth_token.clone();
@@ -307,7 +304,7 @@ async fn main() -> anyhow::Result<()> {
                                         .into_owned();
 
                                     if safe_file_name.is_empty() {
-                                        error!("Serwer zwrocil pusta nazwe pliku");
+                                        error!("Server returned an empty file name");
                                         return;
                                     }
 
@@ -321,25 +318,25 @@ async fn main() -> anyhow::Result<()> {
 
                                         while let Ok(Some(chunk)) = response.chunk().await {
                                             if buf_writer.write_all(&chunk).await.is_err() {
-                                                error!("Blad zapisu pliku na dysk");
+                                                error!("Error writing file to disk");
                                                 break;
                                             }
                                         }
                                         let _ = buf_writer.flush().await;
-                                        info!("Pomyslnie zapisano plik: {:?}", file_path);
+                                        info!("Saved file successfully: {:?}", file_path);
                                     } else {
-                                        error!("Nie mozna utworzyc pliku: {:?}", file_path);
+                                        error!("Could not create file: {:?}", file_path);
                                     }
                                 }
                                 Ok(response) => {
-                                    error!("Blad serwera podczas pobierania: {}", response.status())
+                                    error!("Server error during download: {}", response.status())
                                 }
-                                Err(e) => error!("Blad sieci: {}", e),
+                                Err(e) => error!("Network error: {}", e),
                             }
                         });
                     }
                     ServerMessage::Error { message } => {
-                        error!("Blad serwera: {}", message);
+                        error!("Server error: {}", message);
                     }
                 }
             }

@@ -1,6 +1,6 @@
 # AeroShare API
 
-English documentation is the main README. Polish documentation is available in [README.pl.md](README.pl.md).
+English documentation is the main README.
 
 AeroShare API is a Rust file-sharing application that uses a relay server. The project is split into three workspace crates:
 
@@ -160,6 +160,18 @@ download 8f3c2f6a-0f6d-4c57-9c6e-cf7f9d6f4b1a test.txt
 ```
 
 The requesting client saves downloaded files in `./downloads`.
+
+To list files shared by the server from the client console:
+
+```text
+server-files
+```
+
+You can also use:
+
+```text
+files server
+```
 
 To download from the server's own shared folder, use:
 

@@ -53,9 +53,9 @@ async fn main() -> anyhow::Result<()> {
     let token_path = "server_token.txt";
     let token = if let Ok(env_token) = env::var("SERVER_TOKEN") {
         if env_token.trim().is_empty() {
-            anyhow::bail!("SERVER_TOKEN nie moze byc pusty");
+            anyhow::bail!("SERVER_TOKEN cannot be empty");
         }
-        info!("Uzywam tokenu z SERVER_TOKEN");
+        info!("Using token from SERVER_TOKEN");
         env_token.trim().to_string()
     } else if let Ok(existing_token) = fs::read_to_string(token_path) {
         existing_token.trim().to_string()
@@ -67,22 +67,22 @@ async fn main() -> anyhow::Result<()> {
             .collect();
         fs::write(token_path, &new_token)?;
         info!(
-            "Wygenerowano nowy token uwierzytelniajacy i zapisano do {}",
+            "Generated a new authentication token and wrote it to {}",
             token_path
         );
         new_token
     };
 
-    info!("Serwer uruchomiony z wlaczona autoryzacja tokenem");
+    info!("Server started with token authentication enabled");
     let server_shared_dir =
         PathBuf::from(env::var("SERVER_SHARED_DIR").unwrap_or_else(|_| "./server_files".into()));
     fs::create_dir_all(&server_shared_dir)?;
-    info!("Folder plikow serwera: {:?}", server_shared_dir);
+    info!("Server shared folder: {:?}", server_shared_dir);
     let server_download_dir = PathBuf::from(
         env::var("SERVER_DOWNLOAD_DIR").unwrap_or_else(|_| "./server_downloads".into()),
     );
     fs::create_dir_all(&server_download_dir)?;
-    info!("Folder pobranych plikow serwera: {:?}", server_download_dir);
+    info!("Server download folder: {:?}", server_download_dir);
 
     let state = Arc::new(AppState {
         auth_token: token,
@@ -105,14 +105,14 @@ async fn main() -> anyhow::Result<()> {
 
     let bind_addr = env::var("SERVER_BIND").unwrap_or_else(|_| "0.0.0.0:5000".to_string());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    info!("Serwer nasluchuje na {}", listener.local_addr()?);
+    info!("Server listening on {}", listener.local_addr()?);
     axum::serve(listener, app).await?;
 
     Ok(())
 }
 
 async fn read_server_commands(state: Arc<AppState>) {
-    println!("Komendy serwera: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help");
+    println!("Server commands: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help");
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
@@ -124,7 +124,7 @@ async fn read_server_commands(state: Arc<AppState>) {
         }
 
         if line.eq_ignore_ascii_case("help") {
-            println!("Komendy: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
+            println!("Commands: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>, help");
             continue;
         }
 
@@ -155,7 +155,7 @@ async fn read_server_commands(state: Arc<AppState>) {
             || target_client_id.is_empty()
             || file_path.is_empty()
         {
-            println!("Nieznana komenda. Uzycie: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
+            println!("Unknown command. Usage: clients, server-files, files <client_id|server>, download <client_id|server> <file_path>");
             continue;
         }
 
@@ -173,23 +173,23 @@ async fn list_connected_clients(state: &Arc<AppState>) {
     let folders = state.folders.read().await;
 
     if clients.is_empty() {
-        println!("Brak polaczonych klientow");
+        println!("No connected clients");
         return;
     }
 
-    println!("Polaczeni klienci:");
+    println!("Connected clients:");
     for client_id in clients.keys() {
         if let Some(folder) = folders.get(client_id) {
-            println!("- {} ({} plikow)", client_id, folder.files.len());
+            println!("- {} ({} files)", client_id, folder.files.len());
             if folder.files.is_empty() {
-                println!("  brak plikow");
+                println!("  no files");
             } else {
                 for file in &folder.files {
                     println!("  - {} ({} B)", file.path, file.size);
                 }
             }
         } else {
-            println!("- {} (brak zarejestrowanej listy plikow)", client_id);
+            println!("- {} (no registered file list)", client_id);
         }
     }
 }
@@ -198,14 +198,14 @@ async fn list_files_for_target(state: &Arc<AppState>, target_client_id: &str) {
     if target_client_id.eq_ignore_ascii_case("server") {
         match collect_server_files(state) {
             Ok(files) => print_files("server", &files),
-            Err(e) => println!("Blad listowania plikow serwera: {}", e),
+            Err(e) => println!("Error listing server files: {}", e),
         }
         return;
     }
 
     let clients = state.clients.read().await;
     if !clients.contains_key(target_client_id) {
-        println!("Nie znaleziono klienta: {}", target_client_id);
+        println!("Client not found: {}", target_client_id);
         return;
     }
     drop(clients);
@@ -213,7 +213,7 @@ async fn list_files_for_target(state: &Arc<AppState>, target_client_id: &str) {
     let folders = state.folders.read().await;
     let Some(folder) = folders.get(target_client_id) else {
         println!(
-            "Klient {} nie zarejestrowal jeszcze listy plikow",
+            "Client {} has not registered a file list yet",
             target_client_id
         );
         return;
@@ -224,11 +224,11 @@ async fn list_files_for_target(state: &Arc<AppState>, target_client_id: &str) {
 
 fn print_files(target_client_id: &str, files: &[FileMetadata]) {
     if files.is_empty() {
-        println!("Brak plikow dla: {}", target_client_id);
+        println!("No files for: {}", target_client_id);
         return;
     }
 
-    println!("Pliki {}:", target_client_id);
+    println!("Files for {}:", target_client_id);
     for file in files {
         println!("- {} ({} B)", file.path, file.size);
     }
@@ -264,7 +264,7 @@ async fn ws_handler(
     State(state): State<Arc<AppState>>,
 ) -> Response {
     if query.token != state.auth_token {
-        warn!("Odrzucono polaczenie WS z powodu blednego tokenu");
+        warn!("Rejected WS connection because of an invalid token");
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -274,7 +274,7 @@ async fn ws_handler(
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let client_id = uuid::Uuid::new_v4().to_string();
-    info!("Klient polaczony. Zarejestrowano ID: {}", client_id);
+    info!("Client connected. Registered ID: {}", client_id);
 
     let (tx, mut rx) = mpsc::channel(100);
     state
@@ -304,7 +304,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
                 Err(err) => {
-                    error!("Nie mozna zserializowac wiadomosci serwera: {}", err);
+                    error!("Could not serialize server message: {}", err);
                     break;
                 }
             }
@@ -318,7 +318,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             let client_msg = match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(msg) => msg,
                 Err(err) => {
-                    warn!("Niepoprawna wiadomosc od klienta {}: {}", cid, err);
+                    warn!("Invalid message from client {}: {}", cid, err);
                     continue;
                 }
             };
@@ -326,7 +326,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             match client_msg {
                 ClientMessage::Register { folder } => {
                     info!(
-                        "Klient {} udostepnil folder z {} plikami",
+                        "Client {} shared a folder with {} files",
                         cid,
                         folder.files.len()
                     );
@@ -346,7 +346,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     target_client_id,
                     file_path,
                 } => {
-                    info!("Klient {} prosi o plik od {}", cid, target_client_id);
+                    info!("Client {} requested a file from {}", cid, target_client_id);
                     request_download(&state_clone, &tx, target_client_id, file_path).await;
                 }
             }
@@ -358,7 +358,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         _ = (&mut recv_task) => send_task.abort(),
     }
 
-    info!("Klient {} odlaczony", client_id);
+    info!("Client {} disconnected", client_id);
     cleanup_client(&state, &client_id).await;
 }
 
@@ -377,7 +377,7 @@ async fn request_download(
     let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
         let _ = requester_tx
             .send(ServerMessage::Error {
-                message: "Cel niedostepny".into(),
+                message: "Target is unavailable".into(),
             })
             .await;
         return;
@@ -416,7 +416,7 @@ async fn request_download(
         state.streams.write().await.remove(&stream_id);
         let _ = requester_tx
             .send(ServerMessage::Error {
-                message: "Nie mozna zlecic wysylki pliku".into(),
+                message: "Could not request file upload".into(),
             })
             .await;
     }
@@ -457,10 +457,10 @@ async fn send_files_list(
                     .await;
             }
             Err(e) => {
-                error!("Nie mozna wypisac plikow serwera: {}", e);
+                error!("Could not list server files: {}", e);
                 let _ = requester_tx
                     .send(ServerMessage::Error {
-                        message: "Nie mozna wypisac plikow serwera".into(),
+                        message: "Could not list server files".into(),
                     })
                     .await;
             }
@@ -472,7 +472,7 @@ async fn send_files_list(
     if !clients.contains_key(&target_client_id) {
         let _ = requester_tx
             .send(ServerMessage::Error {
-                message: format!("Nie znaleziono klienta: {}", target_client_id),
+                message: format!("Client not found: {}", target_client_id),
             })
             .await;
         return;
@@ -484,7 +484,7 @@ async fn send_files_list(
         let _ = requester_tx
             .send(ServerMessage::Error {
                 message: format!(
-                    "Klient {} nie zarejestrowal jeszcze listy plikow",
+                    "Client {} has not registered a file list yet",
                     target_client_id
                 ),
             })
@@ -508,7 +508,7 @@ async fn request_server_file_download(
     if !is_safe_relative_path(&file_path) {
         let _ = requester_tx
             .send(ServerMessage::Error {
-                message: "Niedozwolona sciezka pliku serwera".into(),
+                message: "Invalid server file path".into(),
             })
             .await;
         return;
@@ -520,10 +520,10 @@ async fn request_server_file_download(
     let shared_dir_canon = match fs::canonicalize(&state.server_shared_dir) {
         Ok(path) => path,
         Err(e) => {
-            error!("Nie mozna zweryfikowac folderu plikow serwera: {}", e);
+            error!("Could not verify the server file folder: {}", e);
             let _ = requester_tx
                 .send(ServerMessage::Error {
-                    message: "Folder plikow serwera jest niedostepny".into(),
+                    message: "Server file folder is unavailable".into(),
                 })
                 .await;
             return;
@@ -538,7 +538,7 @@ async fn request_server_file_download(
     if !is_safe {
         let _ = requester_tx
             .send(ServerMessage::Error {
-                message: "Plik serwera nie istnieje albo jest poza folderem".into(),
+                message: "Server file does not exist or is outside the folder".into(),
             })
             .await;
         return;
@@ -570,7 +570,7 @@ async fn request_server_file_download(
     let state_clone = state.clone();
     tokio::spawn(async move {
         if let Err(e) = stream_server_file(full_path, stream_tx).await {
-            error!("Blad streamingu pliku serwera: {}", e);
+            error!("Error streaming server file: {}", e);
         }
 
         let mut streams = state_clone.streams.write().await;
@@ -595,7 +595,7 @@ async fn request_client_file_for_server(
 
     let clients_read = state.clients.read().await;
     let Some(target_tx) = clients_read.get(&target_client_id).cloned() else {
-        warn!("Nie znaleziono klienta: {}", target_client_id);
+        warn!("Client not found: {}", target_client_id);
         return;
     };
     drop(clients_read);
@@ -607,7 +607,7 @@ async fn request_client_file_for_server(
         .to_string();
 
     if file_name.is_empty() {
-        warn!("Nie mozna pobrac pliku bez nazwy");
+        warn!("Cannot download a file without a name");
         return;
     }
 
@@ -628,27 +628,27 @@ async fn request_client_file_for_server(
 
     if target_tx.send(upload_req).await.is_err() {
         state.streams.write().await.remove(&stream_id);
-        warn!("Nie mozna zlecic klientowi wysylki pliku");
+        warn!("Could not request file upload from the client");
         return;
     }
 
     let mut receiver = {
         let mut streams = state.streams.write().await;
         let Some(entry) = streams.get_mut(&stream_id) else {
-            warn!("Stream pobierania nie istnieje");
+            warn!("Download stream does not exist");
             return;
         };
         entry.receiver.take()
     };
 
     let Some(mut receiver) = receiver.take() else {
-        warn!("Stream pobierania zostal juz uzyty");
+        warn!("Download stream has already been used");
         return;
     };
 
     let output_path = state.server_download_dir.join(file_name);
     info!(
-        "Serwer pobiera plik od klienta {} do {:?}",
+        "Server is downloading file from client {} to {:?}",
         target_client_id, output_path
     );
 
@@ -656,14 +656,14 @@ async fn request_client_file_for_server(
     state.streams.write().await.remove(&stream_id);
 
     match result {
-        Ok(()) => info!("Serwer zapisal pobrany plik: {:?}", output_path),
-        Err(e) => error!("Blad zapisu pobranego pliku na serwerze: {}", e),
+        Ok(()) => info!("Server saved downloaded file: {:?}", output_path),
+        Err(e) => error!("Error writing downloaded file on the server: {}", e),
     }
 }
 
 async fn download_server_file_for_server(state: &Arc<AppState>, file_path: String) {
     if !is_safe_relative_path(&file_path) {
-        warn!("Niedozwolona sciezka pliku serwera");
+        warn!("Invalid server file path");
         return;
     }
 
@@ -673,7 +673,7 @@ async fn download_server_file_for_server(state: &Arc<AppState>, file_path: Strin
     let shared_dir_canon = match fs::canonicalize(&state.server_shared_dir) {
         Ok(path) => path,
         Err(e) => {
-            error!("Nie mozna zweryfikowac folderu plikow serwera: {}", e);
+            error!("Could not verify the server file folder: {}", e);
             return;
         }
     };
@@ -681,7 +681,7 @@ async fn download_server_file_for_server(state: &Arc<AppState>, file_path: Strin
     let full_path = match fs::canonicalize(&full_path) {
         Ok(path) if path.starts_with(&shared_dir_canon) => path,
         _ => {
-            warn!("Plik serwera nie istnieje albo jest poza folderem");
+            warn!("Server file does not exist or is outside the folder");
             return;
         }
     };
@@ -693,14 +693,14 @@ async fn download_server_file_for_server(state: &Arc<AppState>, file_path: Strin
         .to_string();
 
     if file_name.is_empty() {
-        warn!("Nie mozna pobrac pliku bez nazwy");
+        warn!("Cannot download a file without a name");
         return;
     }
 
     let output_path = state.server_download_dir.join(file_name);
     match tokio::fs::copy(&full_path, &output_path).await {
-        Ok(_) => info!("Serwer skopiowal plik do {:?}", output_path),
-        Err(e) => error!("Blad kopiowania pliku serwera: {}", e),
+        Ok(_) => info!("Server copied file to {:?}", output_path),
+        Err(e) => error!("Error copying server file: {}", e),
     }
 }
 
@@ -771,7 +771,7 @@ async fn handle_upload(
     mut body: Body,
 ) -> Response {
     if !is_authorized(&headers, &state) {
-        warn!("Odrzucono upload streamu bez poprawnej autoryzacji");
+        warn!("Rejected stream upload without valid authorization");
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -783,23 +783,23 @@ async fn handle_upload(
     };
 
     let Some(sender) = sender else {
-        warn!("Bledny stream_id podczas uploadu: {}", stream_id);
+        warn!("Invalid stream_id during upload: {}", stream_id);
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    info!("Rozpoczeto odbieranie streamu: {}", stream_id);
+    info!("Started receiving stream: {}", stream_id);
     while let Some(chunk_res) = body.frame().await {
         match chunk_res {
             Ok(frame) => {
                 if let Ok(bytes) = frame.into_data() {
                     if sender.send(Ok(bytes)).await.is_err() {
-                        warn!("Klient pobierajacy rozlaczyl sie");
+                        warn!("Downloading client disconnected");
                         break;
                     }
                 }
             }
             Err(err) => {
-                error!("Blad odczytu body uploadu: {}", err);
+                error!("Error reading upload body: {}", err);
                 return StatusCode::BAD_REQUEST.into_response();
             }
         }
@@ -814,7 +814,7 @@ async fn handle_upload(
         }
     }
 
-    info!("Zakonczono odbieranie streamu: {}", stream_id);
+    info!("Finished receiving stream: {}", stream_id);
     StatusCode::OK.into_response()
 }
 
@@ -824,7 +824,7 @@ async fn handle_download(
     headers: HeaderMap,
 ) -> Response {
     if !is_authorized(&headers, &state) {
-        warn!("Odrzucono download streamu bez poprawnej autoryzacji");
+        warn!("Rejected stream download without valid authorization");
         return StatusCode::UNAUTHORIZED.into_response();
     }
 

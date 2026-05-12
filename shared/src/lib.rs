@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FileMetadata {
-    pub path: String, // Względna ścieżka od root folderu udostępniania
+    pub path: String, // Relative path from the shared folder root
     pub size: u64,
 }
 
@@ -20,13 +20,13 @@ pub struct ClientInfo {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
-    /// Klient rejestruje folder z plikami po starcie
+    /// The client registers its shared folder after startup
     Register { folder: SharedFolder },
-    /// Klient prosi o liste podlaczonych klientow
+    /// The client requests the list of connected clients
     ListClients,
-    /// Klient prosi o liste plikow klienta albo serwera
+    /// The client requests the file list for another client or the server
     ListFiles { target_client_id: String },
-    /// Klient prosi o pobranie pliku od innego klienta
+    /// The client requests a file download from another client
     RequestDownload {
         target_client_id: String,
         file_path: String,
@@ -36,25 +36,25 @@ pub enum ClientMessage {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
-    /// Potwierdzenie rejestracji z nadanym ID klienta
+    /// Registration confirmation with the assigned client ID
     Registered { client_id: String },
-    /// Lista podlaczonych klientow
+    /// List of connected clients
     ClientsList { clients: Vec<ClientInfo> },
-    /// Lista plikow klienta albo serwera
+    /// File list for a client or the server
     FileList {
         target_client_id: String,
         files: Vec<FileMetadata>,
     },
-    /// Polecenie dla klienta (źródła) aby wysłał plik strumieniem na wskazany endpoint
+    /// Instruction for the source client to stream a file to the given endpoint
     UploadInstruction {
         file_path: String,
         stream_id: String,
     },
-    /// Informacja dla klienta pobierającego skąd ma ściągnąć plik
+    /// Information for the downloading client about where to fetch the file
     DownloadReady {
         stream_id: String,
         file_name: String,
     },
-    /// Błąd
+    /// Error
     Error { message: String },
 }
